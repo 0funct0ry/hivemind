@@ -1,10 +1,20 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"github.com/0funct0ry/hivemind/internal/api"
+	"github.com/0funct0ry/hivemind/internal/auth"
 	"github.com/0funct0ry/hivemind/internal/config"
 	"github.com/0funct0ry/hivemind/internal/logging"
+	"github.com/0funct0ry/hivemind/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -58,6 +68,47 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 	logging.New(loaded.Config.LogLevel, loaded.Config.LogFormat)
-	cmd.Println("not implemented yet")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	s, err := store.Open(ctx, loaded.Config.DataDir)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate store: %w", err)
+	}
+	a := auth.New(s, loaded.Config.SessionTTL)
+	go func() {
+		t := time.NewTicker(15 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				if err := s.SweepSessions(ctx, now.UnixMilli()); err != nil {
+					slog.Default().Error("session sweep failed", "error", err)
+				}
+			}
+		}
+	}()
+	h := api.NewRouter(s, a, loaded.Config)
+	server := &http.Server{Addr: loaded.Config.Addr, Handler: h}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	var serveErr error
+	if loaded.Config.TLS.Cert != "" {
+		serveErr = server.ListenAndServeTLS(loaded.Config.TLS.Cert, loaded.Config.TLS.Key)
+	} else {
+		serveErr = server.ListenAndServe()
+	}
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		return fmt.Errorf("serve HTTP: %w", serveErr)
+	}
 	return nil
 }
