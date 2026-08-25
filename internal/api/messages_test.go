@@ -155,3 +155,130 @@ func TestMessageAPIRateLimit(t *testing.T) {
 		t.Fatalf("expected 429 rate limit, got %d. Resp: %s", code, resp)
 	}
 }
+
+func TestThreadAPI(t *testing.T) {
+	tc := setupTestContext(t)
+	defer tc.close()
+
+	// 1. Post root message
+	code, resp := tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sMember, map[string]any{"body": "Root thread message"})
+	if code != 201 {
+		t.Fatalf("expected 201, got %d", code)
+	}
+
+	var rootResp struct {
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(resp), &rootResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Post reply
+	replyBody := map[string]any{
+		"body":      "Thread reply 1",
+		"thread_id": rootResp.Message.ID,
+	}
+	code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sMember, replyBody)
+	if code != 201 {
+		t.Fatalf("expected 201, got %d", code)
+	}
+
+	var replyResp struct {
+		Message struct {
+			ID        string `json:"id"`
+			ThreadID  string `json:"thread_id"`
+			Broadcast bool   `json:"broadcast"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(resp), &replyResp); err != nil {
+		t.Fatal(err)
+	}
+	if replyResp.Message.ThreadID != rootResp.Message.ID {
+		t.Errorf("expected thread_id to be %s, got %s", rootResp.Message.ID, replyResp.Message.ThreadID)
+	}
+	if replyResp.Message.Broadcast != false {
+		t.Errorf("expected broadcast to be false, got %t", replyResp.Message.Broadcast)
+	}
+
+	// 3. Post reply with broadcast (also_send_to_channel)
+	replyBroadcastBody := map[string]any{
+		"body":                 "Broadcast reply",
+		"thread_id":            rootResp.Message.ID,
+		"also_send_to_channel": true,
+	}
+	code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sMember, replyBroadcastBody)
+	if code != 201 {
+		t.Fatalf("expected 201, got %d", code)
+	}
+
+	var replyBroadcastResp struct {
+		Message struct {
+			ID        string `json:"id"`
+			ThreadID  string `json:"thread_id"`
+			Broadcast bool   `json:"broadcast"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(resp), &replyBroadcastResp); err != nil {
+		t.Fatal(err)
+	}
+	if replyBroadcastResp.Message.Broadcast != true {
+		t.Errorf("expected broadcast to be true, got %t", replyBroadcastResp.Message.Broadcast)
+	}
+
+	// 4. Test GET list replies
+	code, resp = tc.request("GET", fmt.Sprintf("/api/v1/messages/%s/replies", rootResp.Message.ID), tc.sMember, nil)
+	if code != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", code, resp)
+	}
+
+	var listRepliesResp struct {
+		Root *struct {
+			ID string `json:"id"`
+		} `json:"root"`
+		Data []struct {
+			ID        string `json:"id"`
+			Broadcast bool   `json:"broadcast"`
+		} `json:"data"`
+		HasMore bool `json:"has_more"`
+	}
+	if err := json.Unmarshal([]byte(resp), &listRepliesResp); err != nil {
+		t.Fatal(err)
+	}
+
+	if listRepliesResp.Root == nil || listRepliesResp.Root.ID != rootResp.Message.ID {
+		t.Errorf("expected root ID to be %s, got %v", rootResp.Message.ID, listRepliesResp.Root)
+	}
+	if len(listRepliesResp.Data) != 2 {
+		t.Errorf("expected 2 replies, got %d", len(listRepliesResp.Data))
+	}
+
+	// 5. Test depth coercion: posting reply to replyResp should coerce thread_id to rootResp
+	replyToReplyBody := map[string]any{
+		"body":      "Reply to reply (coercion test)",
+		"thread_id": replyResp.Message.ID,
+	}
+	code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sMember, replyToReplyBody)
+	if code != 201 {
+		t.Fatalf("expected 201, got %d", code)
+	}
+
+	var replyToReplyResp struct {
+		Message struct {
+			ThreadID string `json:"thread_id"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(resp), &replyToReplyResp); err != nil {
+		t.Fatal(err)
+	}
+	if replyToReplyResp.Message.ThreadID != rootResp.Message.ID {
+		t.Errorf("expected coerced thread_id to be %s, got %s", rootResp.Message.ID, replyToReplyResp.Message.ThreadID)
+	}
+
+	// 6. Test channel mismatch: post a message to ch1, try to reply to it specifying ch2
+	code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.privCh.ID), tc.sMember, replyBody)
+	if code != 400 {
+		t.Fatalf("expected 400, got %d. Resp: %s", code, resp)
+	}
+}

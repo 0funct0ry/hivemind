@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -159,5 +162,206 @@ func TestMessageStoreCRUD(t *testing.T) {
 	}
 	if listAfter[0].ID != msgs[2].ID || listAfter[1].ID != msgs[3].ID {
 		t.Errorf("expected msgs[2] and msgs[3], got IDs %d and %d", listAfter[0].ID, listAfter[1].ID)
+	}
+}
+
+func TestQueryPlan(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	query := `EXPLAIN QUERY PLAN
+		SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
+		FROM messages
+		WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1)
+		ORDER BY id DESC`
+	rows, err := s.reader.QueryContext(ctx, query, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var selectid, order, from int
+	var detail string
+	var usedIndex bool
+	for rows.Next() {
+		if err := rows.Scan(&selectid, &order, &from, &detail); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("QUERY PLAN: %s", detail)
+		if strings.Contains(detail, "USING INDEX idx_msg_channel_root") || strings.Contains(detail, "USING COVERING INDEX idx_msg_channel_root") {
+			usedIndex = true
+		}
+	}
+	if !usedIndex {
+		t.Error("expected query plan to use idx_msg_channel_root")
+	}
+}
+
+func TestThreads(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	u1, err := s.CreateUser(ctx, UserInput{Username: "alice", Email: "alice@example.com", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch1, err := s.CreateChannel(ctx, "public", "general-threads", "General", "General talk", u1.ID, []int64{u1.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch2, err := s.CreateChannel(ctx, "public", "random", "Random", "Random talk", u1.ID, []int64{u1.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root, _, err := s.CreateMessage(ctx, MessageInput{
+		ChannelID: ch1.ID,
+		UserID:    u1.ID,
+		Body:      "Root thread message",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reply1, _, err := s.CreateMessage(ctx, MessageInput{
+		ChannelID: ch1.ID,
+		UserID:    u1.ID,
+		Body:      "Reply 1",
+		ThreadID:  &root.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reply1.ThreadID == nil || *reply1.ThreadID != root.ID {
+		t.Fatalf("expected thread_id to be %d, got %v", root.ID, reply1.ThreadID)
+	}
+
+	rootGot, _ := s.GetMessage(ctx, root.ID)
+	if rootGot.ReplyCount != 1 || rootGot.LastReplyID == nil || *rootGot.LastReplyID != reply1.ID {
+		t.Errorf("expected root reply_count=1, last_reply_id=%d, got count=%d, last=%v", reply1.ID, rootGot.ReplyCount, rootGot.LastReplyID)
+	}
+
+	reply2, _, err := s.CreateMessage(ctx, MessageInput{
+		ChannelID: ch1.ID,
+		UserID:    u1.ID,
+		Body:      "Reply 2 (depth 2 coercion test)",
+		ThreadID:  &reply1.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply2.ThreadID == nil || *reply2.ThreadID != root.ID {
+		t.Errorf("expected reply2 thread_id coerced to root ID %d, got %v", root.ID, reply2.ThreadID)
+	}
+
+	rootGot2, _ := s.GetMessage(ctx, root.ID)
+	if rootGot2.ReplyCount != 2 || rootGot2.LastReplyID == nil || *rootGot2.LastReplyID != reply2.ID {
+		t.Errorf("expected root reply_count=2, last_reply_id=%d, got count=%d, last=%v", reply2.ID, rootGot2.ReplyCount, rootGot2.LastReplyID)
+	}
+
+	_, _, err = s.CreateMessage(ctx, MessageInput{
+		ChannelID: ch2.ID,
+		UserID:    u1.ID,
+		Body:      "Reply in wrong channel",
+		ThreadID:  &root.ID,
+	})
+	if !errors.Is(err, ErrThreadChannelMismatch) {
+		t.Errorf("expected ErrThreadChannelMismatch, got %v", err)
+	}
+
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		now := nowMillis()
+		_, err := tx.ExecContext(ctx, "UPDATE messages SET deleted_at = ? WHERE id = ?", now, root.ID)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = s.CreateMessage(ctx, MessageInput{
+		ChannelID: ch1.ID,
+		UserID:    u1.ID,
+		Body:      "Reply to deleted root",
+		ThreadID:  &root.ID,
+	})
+	if !errors.Is(err, ErrThreadDeleted) {
+		t.Errorf("expected ErrThreadDeleted, got %v", err)
+	}
+
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE messages SET deleted_at = NULL WHERE id = ?", root.ID)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repliesList, err := s.ListReplies(ctx, root.ID, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repliesList) != 3 {
+		t.Fatalf("expected 3 items in ListReplies, got %d", len(repliesList))
+	}
+	if repliesList[0].ID != root.ID || repliesList[1].ID != reply1.ID || repliesList[2].ID != reply2.ID {
+		t.Errorf("unexpected list order: %v, %v, %v", repliesList[0].ID, repliesList[1].ID, repliesList[2].ID)
+	}
+
+	afterID := reply1.ID
+	repliesListAfter, err := s.ListReplies(ctx, root.ID, &afterID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repliesListAfter) != 1 || repliesListAfter[0].ID != reply2.ID {
+		t.Errorf("expected only reply2, got %d items, first ID %d", len(repliesListAfter), repliesListAfter[0].ID)
+	}
+
+	broadcastReply, _, err := s.CreateMessage(ctx, MessageInput{
+		ChannelID: ch1.ID,
+		UserID:    u1.ID,
+		Body:      "Broadcast reply",
+		ThreadID:  &root.ID,
+		Broadcast: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	channelMsgs, err := s.ListChannelMessages(ctx, ch1.ID, nil, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	hasRoot := false
+	hasBroadcast := false
+	hasReply1 := false
+	for _, m := range channelMsgs {
+		if m.ID == root.ID {
+			hasRoot = true
+		}
+		if m.ID == broadcastReply.ID {
+			hasBroadcast = true
+		}
+		if m.ID == reply1.ID {
+			hasReply1 = true
+		}
+	}
+	if !hasRoot || !hasBroadcast || hasReply1 {
+		t.Errorf("unexpected channel messages list (want root and broadcast, no reply1): root=%v, broadcast=%v, reply1=%v", hasRoot, hasBroadcast, hasReply1)
 	}
 }

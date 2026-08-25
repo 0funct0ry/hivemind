@@ -86,6 +86,7 @@ func publicMessage(m store.Message) gin.H {
 		"reply_count":     m.ReplyCount,
 		"last_reply_id":   nil,
 		"has_attachments": m.HasAttachments,
+		"broadcast":       m.Broadcast,
 		"attachments":     atts,
 		"edited_at":       m.EditedAt,
 		"deleted_at":      m.DeletedAt,
@@ -138,10 +139,11 @@ func messageCreate(s *store.Store) gin.HandlerFunc {
 		}
 
 		var in struct {
-			Body        string   `json:"body"`
-			ThreadID    *string  `json:"thread_id"`
-			ClientMsgID *string  `json:"client_msg_id"`
-			FileIDs     []string `json:"file_ids"`
+			Body              string   `json:"body"`
+			ThreadID          *string  `json:"thread_id"`
+			ClientMsgID       *string  `json:"client_msg_id"`
+			FileIDs           []string `json:"file_ids"`
+			AlsoSendToChannel bool     `json:"also_send_to_channel"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
 			httpx.Fail(c, 400, "invalid_request", "Invalid request body.")
@@ -165,10 +167,19 @@ func messageCreate(s *store.Store) gin.HandlerFunc {
 			ThreadID:    tID,
 			ClientMsgID: in.ClientMsgID,
 			FileIDs:     in.FileIDs,
+			Broadcast:   in.AlsoSendToChannel,
 		}
 
 		msg, existed, err := s.CreateMessage(c.Request.Context(), msgIn)
 		if err != nil {
+			if errors.Is(err, store.ErrThreadChannelMismatch) {
+				httpx.Fail(c, 400, "thread_channel_mismatch", "The parent thread and the reply must be in the same channel.")
+				return
+			}
+			if errors.Is(err, store.ErrThreadDeleted) {
+				httpx.Fail(c, 400, "thread_deleted", "Cannot reply to a deleted thread.")
+				return
+			}
 			httpx.Fail(c, 400, "invalid_message", err.Error())
 			return
 		}
@@ -302,5 +313,102 @@ func messageGet(s *store.Store) gin.HandlerFunc {
 		}
 
 		c.JSON(200, gin.H{"message": publicMessage(msg)})
+	}
+}
+
+func messageListReplies(s *store.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		me, _ := CurrentUser(c)
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			httpx.Fail(c, 404, "message_not_found", "Message not found.")
+			return
+		}
+
+		// To check access, we must first find the message's channel ID.
+		msg, err := s.GetMessage(c.Request.Context(), id)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+				httpx.Fail(c, 404, "message_not_found", "Message not found.")
+				return
+			}
+			httpx.Fail(c, 500, "internal_error", "Could not fetch message.")
+			return
+		}
+
+		// Check channel access
+		access, err := s.CanAccessChannel(c.Request.Context(), me.ID, msg.ChannelID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+				httpx.Fail(c, 404, "message_not_found", "Message not found.")
+				return
+			}
+			httpx.Fail(c, 500, "internal_error", "Could not check channel access.")
+			return
+		}
+		if !access.CanRead {
+			httpx.Fail(c, 404, "message_not_found", "Message not found.")
+			return
+		}
+
+		var after *int64
+		if val := c.Query("after"); val != "" {
+			parsed, err := strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				httpx.Fail(c, 400, "invalid_cursor", "Invalid after cursor.")
+				return
+			}
+			after = &parsed
+		}
+
+		limit := 50
+		if val := c.Query("limit"); val != "" {
+			parsed, err := strconv.Atoi(val)
+			if err == nil {
+				limit = parsed
+			}
+		}
+		if limit <= 0 {
+			limit = 50
+		}
+		if limit > 200 {
+			limit = 200
+		}
+
+		// Fetch limit + 1 to determine has_more
+		msgs, err := s.ListReplies(c.Request.Context(), id, after, limit+1)
+		if err != nil {
+			httpx.Fail(c, 500, "internal_error", "Could not fetch replies.")
+			return
+		}
+
+		var root gin.H
+		var replies []store.Message
+
+		if after == nil {
+			if len(msgs) > 0 {
+				root = publicMessage(msgs[0])
+				replies = msgs[1:]
+			}
+		} else {
+			replies = msgs
+		}
+
+		hasMore := false
+		if len(replies) > limit {
+			hasMore = true
+			replies = replies[:limit]
+		}
+
+		data := make([]gin.H, 0, len(replies))
+		for _, m := range replies {
+			data = append(data, publicMessage(m))
+		}
+
+		c.JSON(200, gin.H{
+			"root":     root,
+			"data":     data,
+			"has_more": hasMore,
+		})
 	}
 }

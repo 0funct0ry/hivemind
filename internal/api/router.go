@@ -123,6 +123,7 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/channels/:id/messages", messageList(s))
 	v1.POST("/channels/:id/messages", messageCreate(s))
 	v1.GET("/messages/:id", messageGet(s))
+	v1.GET("/messages/:id/replies", messageListReplies(s))
 
 	return r
 }

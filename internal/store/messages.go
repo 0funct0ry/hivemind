@@ -21,6 +21,7 @@ type Message struct {
 	ReplyCount     int          `json:"reply_count"`
 	LastReplyID    *int64       `json:"last_reply_id"`
 	HasAttachments bool         `json:"has_attachments"`
+	Broadcast      bool         `json:"broadcast"`
 	Attachments    []Attachment `json:"attachments"`
 	EditedAt       *int64       `json:"edited_at"`
 	DeletedAt      *int64       `json:"deleted_at"`
@@ -46,7 +47,13 @@ type MessageInput struct {
 	ThreadID    *int64
 	ClientMsgID *string
 	FileIDs     []string
+	Broadcast   bool
 }
+
+var (
+	ErrThreadChannelMismatch = errors.New("thread_channel_mismatch")
+	ErrThreadDeleted         = errors.New("thread_deleted")
+)
 
 // isUniqueConstraintError checks if an error is a SQLite unique constraint violation.
 func isUniqueConstraintError(err error) bool {
@@ -75,26 +82,69 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 	var existed bool
 
 	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		// Thread replies validation
+		var rootID int64
+		if in.ThreadID != nil {
+			var parentThreadID sql.NullInt64
+			var parentChannelID int64
+			var parentDeletedAt sql.NullInt64
+			err := tx.QueryRowContext(ctx, `
+				SELECT id, channel_id, thread_id, deleted_at
+				FROM messages
+				WHERE id = ?`, *in.ThreadID).Scan(&rootID, &parentChannelID, &parentThreadID, &parentDeletedAt)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("query parent message: %w", err)
+			}
+			if parentThreadID.Valid {
+				rootID = parentThreadID.Int64
+				err = tx.QueryRowContext(ctx, `
+					SELECT channel_id, deleted_at
+					FROM messages
+					WHERE id = ?`, rootID).Scan(&parentChannelID, &parentDeletedAt)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return ErrNotFound
+					}
+					return fmt.Errorf("query root message: %w", err)
+				}
+			}
+			if parentChannelID != in.ChannelID {
+				return ErrThreadChannelMismatch
+			}
+			if parentDeletedAt.Valid {
+				return ErrThreadDeleted
+			}
+			in.ThreadID = &rootID
+		}
+
 		hasAttachments := 0
 		if len(in.FileIDs) > 0 {
 			hasAttachments = 1
 		}
 
+		broadcastVal := 0
+		if in.Broadcast {
+			broadcastVal = 1
+		}
+
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO messages (channel_id, user_id, thread_id, body, client_msg_id, has_attachments, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			in.ChannelID, in.UserID, in.ThreadID, body, in.ClientMsgID, hasAttachments, now)
+			INSERT INTO messages (channel_id, user_id, thread_id, body, client_msg_id, has_attachments, broadcast, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			in.ChannelID, in.UserID, in.ThreadID, body, in.ClientMsgID, hasAttachments, broadcastVal, now)
 		if err != nil {
 			if isUniqueConstraintError(err) && in.ClientMsgID != nil {
 				existed = true
 				var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal sql.NullInt64
 				var clientMsgIDVal sql.NullString
 				err = tx.QueryRowContext(ctx, `
-					SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, edited_at, deleted_at, created_at
+					SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
 					FROM messages
 					WHERE user_id = ? AND client_msg_id = ?`,
 					in.UserID, *in.ClientMsgID).Scan(
-					&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
+					&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
 				if err != nil {
 					return fmt.Errorf("fetch existing message: %w", err)
 				}
@@ -134,6 +184,18 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 			}
 		}
 
+		// Update root message reply metadata if this is a reply
+		if in.ThreadID != nil {
+			_, err = tx.ExecContext(ctx, `
+				UPDATE messages
+				SET reply_count = reply_count + 1, last_reply_id = ?
+				WHERE id = ?`,
+				id, *in.ThreadID)
+			if err != nil {
+				return fmt.Errorf("update root message reply metadata: %w", err)
+			}
+		}
+
 		// Update channels.last_message_id and updated_at
 		_, err = tx.ExecContext(ctx, `
 			UPDATE channels
@@ -150,6 +212,7 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 		msg.ThreadID = in.ThreadID
 		msg.Body = body
 		msg.ClientMsgID = in.ClientMsgID
+		msg.Broadcast = in.Broadcast
 		msg.HasAttachments = len(in.FileIDs) > 0
 		msg.CreatedAt = now
 		return nil
@@ -174,10 +237,10 @@ func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal sql.NullInt64
 	var clientMsgIDVal sql.NullString
 	err := s.reader.QueryRowContext(ctx, `
-		SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, edited_at, deleted_at, created_at
+		SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
 		FROM messages
 		WHERE id = ?`, id).Scan(
-		&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
+		&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Message{}, ErrNotFound
@@ -223,27 +286,27 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID int64, before
 
 	if before != nil {
 		query = `
-			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, edited_at, deleted_at, created_at
+			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
 			FROM messages
-			WHERE channel_id = ? AND thread_id IS NULL AND id < ?
+			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1) AND id < ?
 			ORDER BY id DESC
 			LIMIT ?`
 		args = append(args, *before, limit)
 		reverse = true
 	} else if after != nil {
 		query = `
-			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, edited_at, deleted_at, created_at
+			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
 			FROM messages
-			WHERE channel_id = ? AND thread_id IS NULL AND id > ?
+			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1) AND id > ?
 			ORDER BY id ASC
 			LIMIT ?`
 		args = append(args, *after, limit)
 		reverse = false
 	} else {
 		query = `
-			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, edited_at, deleted_at, created_at
+			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
 			FROM messages
-			WHERE channel_id = ? AND thread_id IS NULL
+			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1)
 			ORDER BY id DESC
 			LIMIT ?`
 		args = append(args, limit)
@@ -262,7 +325,7 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID int64, before
 		var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal sql.NullInt64
 		var clientMsgIDVal sql.NullString
 		err := rows.Scan(
-			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
+			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
@@ -296,6 +359,96 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID int64, before
 
 	if err := s.HydrateMessages(ctx, messages); err != nil {
 		return nil, err
+	}
+
+	return messages, nil
+}
+
+// ListReplies retrieves replies for a root message using cursor-based pagination.
+// If after is nil, the root message is prepended to the returned list.
+func (s *Store) ListReplies(ctx context.Context, rootID int64, after *int64, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	var messages []Message
+
+	// If after is nil, fetch the root message first.
+	if after == nil {
+		rootMsg, err := s.GetMessage(ctx, rootID)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, rootMsg)
+	}
+
+	var query string
+	var args []any
+	args = append(args, rootID)
+
+	if after != nil {
+		query = `
+			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
+			FROM messages
+			WHERE thread_id = ? AND id > ?
+			ORDER BY id ASC
+			LIMIT ?`
+		args = append(args, *after, limit)
+	} else {
+		query = `
+			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
+			FROM messages
+			WHERE thread_id = ?
+			ORDER BY id ASC
+			LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := s.reader.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list replies query: %w", err)
+	}
+	defer rows.Close()
+
+	var replies []Message
+	for rows.Next() {
+		var msg Message
+		var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal sql.NullInt64
+		var clientMsgIDVal sql.NullString
+		err := rows.Scan(
+			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("scan reply message: %w", err)
+		}
+		if threadIDVal.Valid {
+			msg.ThreadID = &threadIDVal.Int64
+		}
+		if clientMsgIDVal.Valid {
+			msg.ClientMsgID = &clientMsgIDVal.String
+		}
+		if lastReplyIDVal.Valid {
+			msg.LastReplyID = &lastReplyIDVal.Int64
+		}
+		if editedAtVal.Valid {
+			msg.EditedAt = &editedAtVal.Int64
+		}
+		if deletedAtVal.Valid {
+			msg.DeletedAt = &deletedAtVal.Int64
+		}
+		replies = append(replies, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(replies) > 0 {
+		if err := s.HydrateMessages(ctx, replies); err != nil {
+			return nil, err
+		}
+		messages = append(messages, replies...)
 	}
 
 	return messages, nil

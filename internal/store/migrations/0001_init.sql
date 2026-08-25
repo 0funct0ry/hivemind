@@ -37,12 +37,12 @@ CREATE TABLE messages (
   id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id), thread_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
   body TEXT NOT NULL, client_msg_id TEXT, reply_count INTEGER NOT NULL DEFAULT 0,
-  last_reply_id INTEGER, has_attachments INTEGER NOT NULL DEFAULT 0, edited_at INTEGER,
-  deleted_at INTEGER, created_at INTEGER NOT NULL
+  last_reply_id INTEGER, has_attachments INTEGER NOT NULL DEFAULT 0, broadcast INTEGER NOT NULL DEFAULT 0,
+  edited_at INTEGER, deleted_at INTEGER, created_at INTEGER NOT NULL
 );
 CREATE INDEX idx_msg_channel_id ON messages(channel_id, id DESC);
 CREATE INDEX idx_msg_thread ON messages(thread_id, id) WHERE thread_id IS NOT NULL;
-CREATE INDEX idx_msg_channel_root ON messages(channel_id, id DESC) WHERE thread_id IS NULL;
+CREATE INDEX idx_msg_channel_root ON messages(channel_id, id DESC) WHERE thread_id IS NULL OR broadcast = 1;
 CREATE UNIQUE INDEX idx_msg_client ON messages(user_id, client_msg_id) WHERE client_msg_id IS NOT NULL;
 CREATE VIRTUAL TABLE messages_fts USING fts5(body, content='messages', content_rowid='id', tokenize="unicode61 remove_diacritics 2");
 CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
