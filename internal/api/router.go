@@ -135,6 +135,7 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/channels/:id/members", channelMembersList(s))
 	v1.POST("/channels/:id/members", channelAddMembers(s))
 	v1.DELETE("/channels/:id/members/:uid", channelRemoveMember(s))
+	v1.GET("/channels/:id/activity", channelActivity(s))
 
 	v1.GET("/channels/:id/messages", messageList(s))
 	v1.POST("/channels/:id/messages", messageCreate(s, h))
@@ -145,6 +146,7 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/dms", dmList(s))
 	v1.POST("/dms", dmCreate(s))
 
+	v1.GET("/search", search(s))
 	v1.GET("/unreads", unreadSummary(s))
 
 	v1.POST("/uploads", uploadFile(fs))
@@ -342,7 +344,11 @@ func tokenCreate(a *auth.Service) gin.HandlerFunc {
 			Name      string `json:"name"`
 			ExpiresIn string `json:"expires_in"`
 		}
-		if c.ShouldBindJSON(&in) != nil || in.Name == "" {
+		if err := c.ShouldBindJSON(&in); err != nil {
+			httpx.Fail(c, 400, "invalid_request", "Invalid request payload: " + err.Error())
+			return
+		}
+		if in.Name == "" {
 			httpx.Fail(c, 400, "invalid_request", "Token name is required.")
 			return
 		}
