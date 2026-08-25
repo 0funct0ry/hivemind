@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 
+	"github.com/0funct0ry/hivemind/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -15,22 +16,14 @@ var rootCmd = &cobra.Command{
 	Long: `hivemind is a minimal self-hosted team chat server: a single Go binary with
 an embedded web UI and SQLite storage. Run it with no subcommand to start the
 server, equivalent to "hivemind serve".`,
-	Run: runServe,
+	RunE: runServe,
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
 	addServeFlags(rootCmd)
 
-	rootCmd.AddCommand(configShowCmd)
+	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(seedCmd)
-}
-
-// initConfig loads configuration and installs the logger for the invoked
-// subcommand. It is a no-op for subcommands that never registered --config,
-// --log-level, or --log-format.
-func initConfig() {
-	// Real viper wiring lands in M2; nothing to do yet.
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -42,13 +35,23 @@ func Execute() {
 	}
 }
 
-// configShowCmd prints the effective merged configuration. Registered here per
-// SPEC.md §2.4 rather than getting its own cmd/ file.
+// configCmd contains configuration inspection commands.
+var configCmd = &cobra.Command{
+	Use:   "config",
+	Short: "Inspect hivemind configuration",
+}
+
 var configShowCmd = &cobra.Command{
-	Use:   "config show",
+	Use:   "show",
 	Short: "Print the effective merged configuration",
-	Run: func(cmd *cobra.Command, args []string) {
-		cmd.Println("not implemented yet")
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		loaded, err := config.Load(cmd.Flags())
+		if err != nil {
+			return err
+		}
+		_, err = cmd.OutOrStdout().Write([]byte(loaded.YAML()))
+		return err
 	},
 }
 
@@ -60,4 +63,9 @@ var seedCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Println("not implemented yet")
 	},
+}
+
+func init() {
+	configCmd.AddCommand(configShowCmd)
+	addConfigFlags(configShowCmd)
 }
