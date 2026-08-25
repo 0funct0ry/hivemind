@@ -319,7 +319,7 @@ func channelRead(s *store.Store, h *realtime.Hub) gin.HandlerFunc {
 
 		// Fan out read.updated to other connections of the same user
 		h.Publish(realtime.Event{
-			Type:        "read.updated",
+			Type: "read.updated",
 			Payload: map[string]string{
 				"channel_id":           strconv.FormatInt(ch.ID, 10),
 				"last_read_message_id": in.MessageID,

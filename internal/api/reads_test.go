@@ -17,16 +17,16 @@ import (
 )
 
 type readsTestCtx struct {
-	ctx        context.Context
-	s          *store.Store
-	a          *auth.Service
-	r          http.Handler
-	u1         store.User
-	u2         store.User
-	s1         string
-	s2         string
-	pubCh      store.Channel
-	privCh     store.Channel
+	ctx    context.Context
+	s      *store.Store
+	a      *auth.Service
+	r      http.Handler
+	u1     store.User
+	u2     store.User
+	s1     string
+	s2     string
+	pubCh  store.Channel
+	privCh store.Channel
 }
 
 func setupReadsTestContext(t *testing.T) *readsTestCtx {

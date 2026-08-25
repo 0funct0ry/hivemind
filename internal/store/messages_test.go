@@ -465,4 +465,3 @@ func TestCreateMessageWithMentions(t *testing.T) {
 		t.Errorf("expected charlie to be 'channel', got %q", kinds2[charlie.ID])
 	}
 }
-

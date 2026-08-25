@@ -207,6 +207,14 @@ func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 				httpx.Fail(c, 400, "user_deactivated", "Cannot post to a DM containing a deactivated user.")
 				return
 			}
+			if errors.Is(err, store.ErrAttachmentNotFound) {
+				httpx.Fail(c, 400, "attachment_not_found", "One or more attachments were not found.")
+				return
+			}
+			if errors.Is(err, store.ErrAttachmentForbidden) {
+				httpx.Fail(c, 403, "forbidden", "You do not have permission to attach one or more of the specified files.")
+				return
+			}
 			httpx.Fail(c, 400, "invalid_message", err.Error())
 			return
 		}

@@ -312,4 +312,3 @@ func TestMessageAPIMentionsAndAutocomplete(t *testing.T) {
 		t.Fatalf("expected 201, got %d. Body: %s", code, resp)
 	}
 }
-

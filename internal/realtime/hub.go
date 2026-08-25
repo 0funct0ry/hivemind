@@ -394,4 +394,3 @@ func (h *Hub) IsOnline(userID int64) bool {
 	defer h.mu.RUnlock()
 	return len(h.conns[userID]) > 0
 }
-

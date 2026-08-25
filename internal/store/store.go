@@ -34,6 +34,11 @@ type Stats struct {
 // nowMillis is indirected so store tests can use deterministic timestamps.
 var nowMillis = func() int64 { return time.Now().UnixMilli() }
 
+// NowMillis returns the current time in milliseconds, supporting clock indirection.
+func (s *Store) NowMillis() int64 {
+	return nowMillis()
+}
+
 const sqlitePragmas = "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
 
 // Open opens the writer and read-only pools over dataDir/hivemind.db.

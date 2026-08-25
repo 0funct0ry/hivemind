@@ -236,4 +236,3 @@ func (s *Store) AutocompleteUsers(ctx context.Context, q string, channelID *int6
 	}
 	return out, rows.Err()
 }
-

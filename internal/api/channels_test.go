@@ -44,7 +44,7 @@ func setupTestContext(t *testing.T) *testContext {
 	}
 
 	a := auth.New(s, 30*24*time.Hour)
-	cfg := config.Config{WorkspaceName: "Test"}
+	cfg := config.Config{WorkspaceName: "Test", MaxUploadSize: 25 * 1024 * 1024}
 	r := NewRouter(s, a, cfg)
 
 	// Create users

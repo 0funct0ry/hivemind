@@ -16,6 +16,7 @@ import (
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
 	"github.com/0funct0ry/hivemind/internal/auth"
 	"github.com/0funct0ry/hivemind/internal/config"
+	"github.com/0funct0ry/hivemind/internal/filestore"
 	"github.com/0funct0ry/hivemind/internal/realtime"
 	"github.com/0funct0ry/hivemind/internal/store"
 	"github.com/gin-gonic/gin"
@@ -89,6 +90,10 @@ var TestHub *realtime.Hub
 func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	r := gin.New()
 	r.Use(httpx.RequestID(), httpx.Recovery(slog.Default()))
+
+	fs := filestore.New(cfg.DataDir, cfg.MaxUploadSize, s)
+	StartOrphanSweeper(context.Background(), fs, slog.Default())
+
 	b, _ := newBootstrap(s)
 	if b == nil {
 		b = &bootstrap{}
@@ -141,6 +146,9 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.POST("/dms", dmCreate(s))
 
 	v1.GET("/unreads", unreadSummary(s))
+
+	v1.POST("/uploads", uploadFile(fs))
+	v1.GET("/files/:id/:name", serveFile(fs))
 
 	v1.GET("/ws", wsUpgrade(h, s, cfg))
 

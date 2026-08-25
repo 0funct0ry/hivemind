@@ -58,6 +58,8 @@ var (
 	ErrThreadChannelMismatch = errors.New("thread_channel_mismatch")
 	ErrThreadDeleted         = errors.New("thread_deleted")
 	ErrUserDeactivated       = errors.New("user_deactivated")
+	ErrAttachmentNotFound    = errors.New("attachment_not_found")
+	ErrAttachmentForbidden   = errors.New("attachment_forbidden")
 )
 
 // isUniqueConstraintError checks if an error is a SQLite unique constraint violation.
@@ -205,6 +207,18 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 
 		// Insert attachments
 		for pos, fid := range in.FileIDs {
+			var uploadedBy int64
+			err = tx.QueryRowContext(ctx, "SELECT uploaded_by FROM files WHERE id = ?", fid).Scan(&uploadedBy)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrAttachmentNotFound
+				}
+				return fmt.Errorf("verify attachment uploader: %w", err)
+			}
+			if uploadedBy != in.UserID {
+				return ErrAttachmentForbidden
+			}
+
 			_, err = tx.ExecContext(ctx, `
 				INSERT INTO attachments (message_id, file_id, position)
 				VALUES (?, ?, ?)`,
@@ -708,4 +722,3 @@ func (s *Store) GetMessageMentions(ctx context.Context, messageID int64) ([]Ment
 	}
 	return out, rows.Err()
 }
-
