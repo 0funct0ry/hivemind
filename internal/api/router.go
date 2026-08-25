@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
 	"github.com/0funct0ry/hivemind/internal/auth"
 	"github.com/0funct0ry/hivemind/internal/config"
+	"github.com/0funct0ry/hivemind/internal/realtime"
 	"github.com/0funct0ry/hivemind/internal/store"
 	"github.com/gin-gonic/gin"
 )
@@ -80,6 +82,9 @@ func maxWaitIf(v []time.Time, n time.Time, limit int) time.Duration {
 	return maxWait(v, n)
 }
 
+// TestHub is a reference to the active Realtime Hub, exposed for testing purposes.
+var TestHub *realtime.Hub
+
 // NewRouter constructs the M4 API router.
 func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	r := gin.New()
@@ -93,6 +98,12 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	}
 	r.GET("/setup", setupPage(b))
 	lim := newLimiter()
+
+	// Instantiate and run the Realtime Hub
+	h := realtime.NewHub(s)
+	TestHub = h
+	go h.Run(context.Background())
+
 	v1 := r.Group("/api/v1")
 	v1.POST("/auth/login", login(s, a, cfg, lim))
 	v1.POST("/setup", setupCreate(s, a, b))
@@ -121,12 +132,14 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.DELETE("/channels/:id/members/:uid", channelRemoveMember(s))
 
 	v1.GET("/channels/:id/messages", messageList(s))
-	v1.POST("/channels/:id/messages", messageCreate(s))
+	v1.POST("/channels/:id/messages", messageCreate(s, h))
 	v1.GET("/messages/:id", messageGet(s))
 	v1.GET("/messages/:id/replies", messageListReplies(s))
 
 	v1.GET("/dms", dmList(s))
 	v1.POST("/dms", dmCreate(s))
+
+	v1.GET("/ws", wsUpgrade(h, s, cfg))
 
 	return r
 }

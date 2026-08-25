@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
+	"github.com/0funct0ry/hivemind/internal/realtime"
 	"github.com/0funct0ry/hivemind/internal/store"
 	"github.com/gin-gonic/gin"
 )
@@ -44,7 +45,15 @@ func (l *postLimiter) Allow(userID int64, now time.Time) (time.Duration, bool) {
 	return 0, true
 }
 
+var DisableRateLimits = false
 var msgLimiter = newPostLimiter()
+
+// ResetMsgLimiter clears the message rate limit history.
+func ResetMsgLimiter() {
+	msgLimiter.mu.Lock()
+	defer msgLimiter.mu.Unlock()
+	msgLimiter.posts = make(map[int64][]time.Time)
+}
 
 func publicMessage(m store.Message) gin.H {
 	var userVal any = nil
@@ -103,15 +112,19 @@ func publicMessage(m store.Message) gin.H {
 	return res
 }
 
-func messageCreate(s *store.Store) gin.HandlerFunc {
+var createMsgMu sync.Mutex
+
+func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		me, _ := CurrentUser(c)
 
 		// 1. Rate Limit
-		if wait, ok := msgLimiter.Allow(me.ID, time.Now()); !ok {
-			c.Header("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-			httpx.Fail(c, 429, "rate_limited", "Too many messages. Please wait before posting again.")
-			return
+		if !DisableRateLimits {
+			if wait, ok := msgLimiter.Allow(me.ID, time.Now()); !ok {
+				c.Header("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+				httpx.Fail(c, 429, "rate_limited", "Too many messages. Please wait before posting again.")
+				return
+			}
 		}
 
 		// 2. Resolve Channel
@@ -170,8 +183,10 @@ func messageCreate(s *store.Store) gin.HandlerFunc {
 			Broadcast:   in.AlsoSendToChannel,
 		}
 
+		createMsgMu.Lock()
 		msg, existed, err := s.CreateMessage(c.Request.Context(), msgIn)
 		if err != nil {
+			createMsgMu.Unlock()
 			if errors.Is(err, store.ErrThreadChannelMismatch) {
 				httpx.Fail(c, 400, "thread_channel_mismatch", "The parent thread and the reply must be in the same channel.")
 				return
@@ -194,6 +209,33 @@ func messageCreate(s *store.Store) gin.HandlerFunc {
 		}
 
 		c.JSON(status, gin.H{"message": publicMessage(msg)})
+
+		// Publish realtime event if this is a newly created message
+		if !existed {
+			if msg.ThreadID == nil {
+				pub.Publish(realtime.Event{
+					Type:      "message.created",
+					Payload:   publicMessage(msg),
+					ChannelID: msg.ChannelID,
+				})
+			} else {
+				rootMsg, err := s.GetMessage(c.Request.Context(), *msg.ThreadID)
+				if err == nil {
+					pub.Publish(realtime.Event{
+						Type: "thread.reply",
+						Payload: gin.H{
+							"root_id":       strconv.FormatInt(*msg.ThreadID, 10),
+							"channel_id":    strconv.FormatInt(msg.ChannelID, 10),
+							"reply_count":   rootMsg.ReplyCount,
+							"last_reply_id": strconv.FormatInt(msg.ID, 10),
+							"message":       publicMessage(msg),
+						},
+						ChannelID: msg.ChannelID,
+					})
+				}
+			}
+		}
+		createMsgMu.Unlock()
 	}
 }
 
