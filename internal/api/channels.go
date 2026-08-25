@@ -17,14 +17,14 @@ func resolveChannel(c *gin.Context, s *store.Store, meID int64) (store.Channel, 
 	var err error
 	if strings.HasPrefix(idParam, "slug:") {
 		slug := strings.TrimPrefix(idParam, "slug:")
-		ch, err = s.GetChannelBySlug(c, slug)
+		ch, err = s.GetChannelBySlug(c.Request.Context(), slug)
 	} else {
 		id, parseErr := strconv.ParseInt(idParam, 10, 64)
 		if parseErr != nil {
 			httpx.Fail(c, 404, "channel_not_found", "Channel not found.")
 			return store.Channel{}, store.ChannelAccess{}, false
 		}
-		ch, err = s.GetChannel(c, id)
+		ch, err = s.GetChannel(c.Request.Context(), id)
 	}
 
 	if err != nil {
@@ -36,7 +36,7 @@ func resolveChannel(c *gin.Context, s *store.Store, meID int64) (store.Channel, 
 		return store.Channel{}, store.ChannelAccess{}, false
 	}
 
-	access, err := s.CanAccessChannel(c, meID, ch.ID)
+	access, err := s.CanAccessChannel(c.Request.Context(), meID, ch.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
 			httpx.Fail(c, 404, "channel_not_found", "Channel not found.")

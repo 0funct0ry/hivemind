@@ -120,6 +120,10 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.POST("/channels/:id/members", channelAddMembers(s))
 	v1.DELETE("/channels/:id/members/:uid", channelRemoveMember(s))
 
+	v1.GET("/channels/:id/messages", messageList(s))
+	v1.POST("/channels/:id/messages", messageCreate(s))
+	v1.GET("/messages/:id", messageGet(s))
+
 	return r
 }
 
