@@ -178,3 +178,62 @@ func (s *Store) CountAdmins(ctx context.Context) (int64, error) {
 	}
 	return n, nil
 }
+
+// GetUserByUsername finds a user by case-insensitive username.
+func (s *Store) GetUserByUsername(ctx context.Context, username string) (User, error) {
+	return s.getUser(ctx, "WHERE username = ? COLLATE NOCASE", username)
+}
+
+// AutocompleteUsers returns active users matching a query prefix, sorted with exact-prefix matches first,
+// and optionally prioritizes members of a specific channel.
+func (s *Store) AutocompleteUsers(ctx context.Context, q string, channelID *int64, limit int) ([]User, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 50
+	}
+	q = strings.ToLower(q)
+
+	var query string
+	var args []any
+
+	if channelID != nil {
+		query = `
+			SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.avatar_color, u.role, u.is_bot, u.status, u.created_at, u.updated_at
+			FROM users u
+			LEFT JOIN channel_members cm ON u.id = cm.user_id AND cm.channel_id = ?
+			WHERE u.status = 'active' AND (u.username LIKE ? COLLATE NOCASE OR u.display_name LIKE ? COLLATE NOCASE)
+			ORDER BY 
+			  (CASE WHEN u.username = ? COLLATE NOCASE OR u.display_name = ? COLLATE NOCASE THEN 1 ELSE 0 END) DESC,
+			  (CASE WHEN cm.user_id IS NOT NULL THEN 1 ELSE 0 END) DESC,
+			  u.username COLLATE NOCASE
+			LIMIT ?`
+		args = []any{*channelID, q + "%", q + "%", q, q, limit}
+	} else {
+		query = `
+			SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.avatar_color, u.role, u.is_bot, u.status, u.created_at, u.updated_at
+			FROM users u
+			WHERE u.status = 'active' AND (u.username LIKE ? COLLATE NOCASE OR u.display_name LIKE ? COLLATE NOCASE)
+			ORDER BY 
+			  (CASE WHEN u.username = ? COLLATE NOCASE OR u.display_name = ? COLLATE NOCASE THEN 1 ELSE 0 END) DESC,
+			  u.username COLLATE NOCASE
+			LIMIT ?`
+		args = []any{q + "%", q + "%", q, q, limit}
+	}
+
+	rows, err := s.reader.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("autocomplete users: %w", err)
+	}
+	defer rows.Close()
+
+	var out []User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan autocomplete user: %w", err)
+		}
+		u.PasswordHash = ""
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+

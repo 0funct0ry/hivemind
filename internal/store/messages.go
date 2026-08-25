@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/0funct0ry/hivemind/internal/mentions"
 )
 
 // Message represents a single message in a channel or thread.
@@ -48,6 +51,7 @@ type MessageInput struct {
 	ClientMsgID *string
 	FileIDs     []string
 	Broadcast   bool
+	IsOnline    func(userID int64) bool
 }
 
 var (
@@ -230,6 +234,96 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 			id, now, in.ChannelID)
 		if err != nil {
 			return fmt.Errorf("update channel metadata: %w", err)
+		}
+
+		// Resolve mentions
+		resolved := make(map[int64]string)
+		var largeChannelID int64
+		var largeChannelKind string
+		var largeChannelSize int
+
+		refs := mentions.Parse(body)
+		for _, ref := range refs {
+			switch ref.Kind {
+			case "user":
+				var targetID int64
+				var status string
+				err := tx.QueryRowContext(ctx, "SELECT id, status FROM users WHERE username = ? COLLATE NOCASE", ref.Name).Scan(&targetID, &status)
+				if err == nil && status == "active" {
+					var isMember bool
+					err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?)", in.ChannelID, targetID).Scan(&isMember)
+					if err == nil && isMember && targetID != in.UserID {
+						resolved[targetID] = "user"
+					}
+				}
+			case "channel":
+				rows, err := tx.QueryContext(ctx, "SELECT user_id FROM channel_members WHERE channel_id = ?", in.ChannelID)
+				if err == nil {
+					var members []int64
+					for rows.Next() {
+						var mID int64
+						if err := rows.Scan(&mID); err == nil {
+							members = append(members, mID)
+						}
+					}
+					rows.Close()
+
+					for _, mID := range members {
+						if mID != in.UserID {
+							if _, exists := resolved[mID]; !exists {
+								resolved[mID] = "channel"
+							}
+						}
+					}
+					if len(members) > 50 {
+						largeChannelID = in.ChannelID
+						largeChannelKind = "channel"
+						largeChannelSize = len(members)
+					}
+				}
+			case "here":
+				rows, err := tx.QueryContext(ctx, "SELECT user_id FROM channel_members WHERE channel_id = ?", in.ChannelID)
+				if err == nil {
+					var members []int64
+					for rows.Next() {
+						var mID int64
+						if err := rows.Scan(&mID); err == nil {
+							members = append(members, mID)
+						}
+					}
+					rows.Close()
+
+					for _, mID := range members {
+						if mID != in.UserID {
+							if in.IsOnline != nil && in.IsOnline(mID) {
+								if current, exists := resolved[mID]; !exists || current == "channel" {
+									resolved[mID] = "here"
+								}
+							}
+						}
+					}
+					if len(members) > 50 {
+						largeChannelID = in.ChannelID
+						largeChannelKind = "here"
+						largeChannelSize = len(members)
+					}
+				}
+			}
+		}
+
+		if largeChannelID > 0 {
+			slog.Info("Large mention fanout", "channel_id", largeChannelID, "kind", largeChannelKind, "fanout_size", largeChannelSize)
+		}
+
+		// Insert mentions
+		for targetID, kind := range resolved {
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO mentions (message_id, user_id, channel_id, kind, created_at)
+				VALUES (?, ?, ?, ?, ?)`,
+				id, targetID, in.ChannelID, kind, now)
+			if err != nil {
+				return fmt.Errorf("insert mention: %w", err)
+			}
 		}
 
 		msg.ID = id
@@ -586,3 +680,32 @@ func (s *Store) HydrateMessages(ctx context.Context, messages []Message) error {
 
 	return nil
 }
+
+// Mention represents a row in the mentions table.
+type Mention struct {
+	MessageID int64
+	UserID    int64
+	ChannelID int64
+	Kind      string
+	CreatedAt int64
+}
+
+// GetMessageMentions returns all mentions associated with a message ID.
+func (s *Store) GetMessageMentions(ctx context.Context, messageID int64) ([]Mention, error) {
+	rows, err := s.reader.QueryContext(ctx, "SELECT message_id, user_id, channel_id, kind, created_at FROM mentions WHERE message_id = ?", messageID)
+	if err != nil {
+		return nil, fmt.Errorf("query message mentions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Mention
+	for rows.Next() {
+		var m Mention
+		if err := rows.Scan(&m.MessageID, &m.UserID, &m.ChannelID, &m.Kind, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan message mention: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+

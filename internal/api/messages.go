@@ -173,6 +173,13 @@ func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 			tID = &val
 		}
 
+		var isOnline func(int64) bool
+		if hub, ok := pub.(*realtime.Hub); ok {
+			isOnline = func(userID int64) bool {
+				return hub.IsOnline(userID)
+			}
+		}
+
 		msgIn := store.MessageInput{
 			ChannelID:   ch.ID,
 			UserID:      me.ID,
@@ -181,6 +188,7 @@ func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 			ClientMsgID: in.ClientMsgID,
 			FileIDs:     in.FileIDs,
 			Broadcast:   in.AlsoSendToChannel,
+			IsOnline:    isOnline,
 		}
 
 		createMsgMu.Lock()
@@ -231,6 +239,21 @@ func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 							"message":       publicMessage(msg),
 						},
 						ChannelID: msg.ChannelID,
+					})
+				}
+			}
+
+			// Publish mention.created to mentioned users
+			mentionsList, err := s.GetMessageMentions(c.Request.Context(), msg.ID)
+			if err == nil {
+				for _, m := range mentionsList {
+					pub.Publish(realtime.Event{
+						Type: "mention.created",
+						Payload: gin.H{
+							"message_id": strconv.FormatInt(m.MessageID, 10),
+							"channel_id": strconv.FormatInt(m.ChannelID, 10),
+						},
+						UserID: m.UserID,
 					})
 				}
 			}

@@ -387,3 +387,11 @@ func (h *Hub) getChannelMembers(ctx context.Context, channelID int64) map[int64]
 
 	return set
 }
+
+// IsOnline checks if a user has at least one active WebSocket connection.
+func (h *Hub) IsOnline(userID int64) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.conns[userID]) > 0
+}
+

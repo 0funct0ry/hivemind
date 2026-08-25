@@ -282,3 +282,34 @@ func TestThreadAPI(t *testing.T) {
 		t.Fatalf("expected 400, got %d. Resp: %s", code, resp)
 	}
 }
+
+func TestMessageAPIMentionsAndAutocomplete(t *testing.T) {
+	tc := setupTestContext(t)
+	defer tc.close()
+
+	// Autocomplete tests
+	// Query users starting with "a" (alice) without channel_id
+	code, resp := tc.request("GET", "/api/v1/users?q=a", tc.sMember, nil)
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	var usersResp struct {
+		Data []struct {
+			Username string `json:"username"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(resp), &usersResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(usersResp.Data) == 0 {
+		t.Errorf("expected to find users matching 'a'")
+	}
+
+	// Post message with mention
+	body := map[string]any{"body": "Hello @alice"}
+	code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sMember, body)
+	if code != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", code, resp)
+	}
+}
+

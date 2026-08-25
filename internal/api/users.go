@@ -14,7 +14,14 @@ import (
 func userList(s *store.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		limit, _ := strconv.Atoi(c.Query("limit"))
-		users, err := s.ListUsers(c, c.Query("q"), limit, false)
+		var chID *int64
+		if cidStr := c.Query("channel_id"); cidStr != "" {
+			val, err := strconv.ParseInt(cidStr, 10, 64)
+			if err == nil {
+				chID = &val
+			}
+		}
+		users, err := s.AutocompleteUsers(c, c.Query("q"), chID, limit)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not list users.")
 			return

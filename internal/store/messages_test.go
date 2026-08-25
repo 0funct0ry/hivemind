@@ -365,3 +365,104 @@ func TestThreads(t *testing.T) {
 		t.Errorf("unexpected channel messages list (want root and broadcast, no reply1): root=%v, broadcast=%v, reply1=%v", hasRoot, hasBroadcast, hasReply1)
 	}
 }
+
+func TestCreateMessageWithMentions(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create users: alice (author), bob (member, online), charlie (member, offline), dave (non-member)
+	alice, _ := s.CreateUser(ctx, UserInput{Username: "alice", Email: "alice@example.com"})
+	bob, _ := s.CreateUser(ctx, UserInput{Username: "bob", Email: "bob@example.com"})
+	charlie, _ := s.CreateUser(ctx, UserInput{Username: "charlie", Email: "charlie@example.com"})
+	dave, _ := s.CreateUser(ctx, UserInput{Username: "dave", Email: "dave@example.com"})
+
+	// Create channel with alice, bob, charlie
+	ch, err := s.CreateChannel(ctx, "public", "test-mentions", "Test", "Test mentions", alice.ID, []int64{alice.ID, bob.ID, charlie.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Helper to simulate online status
+	isOnline := func(uid int64) bool {
+		return uid == bob.ID // only bob is online
+	}
+
+	// Post message with direct mentions, @channel, @here, non-member, and author itself
+	msg, _, err := s.CreateMessage(ctx, MessageInput{
+		ChannelID: ch.ID,
+		UserID:    alice.ID,
+		Body:      "Hello @bob, @charlie, @dave, @alice, @channel, @here!",
+		IsOnline:  isOnline,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mentionsList, err := s.GetMessageMentions(ctx, msg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// We expect mentions for:
+	// - bob: resolved as "user" (since he is directly mentioned, even though @channel/@here also match him)
+	// - charlie: resolved as "user" (since directly mentioned)
+	// Dave is not a member, so no mention.
+	// Alice is the author, so no mention.
+	// Let's verify who got what kind of mention:
+	kinds := make(map[int64]string)
+	for _, m := range mentionsList {
+		kinds[m.UserID] = m.Kind
+	}
+
+	if len(kinds) != 2 {
+		t.Errorf("expected exactly 2 resolved mentions, got %d: %+v", len(kinds), kinds)
+	}
+	if kinds[bob.ID] != "user" {
+		t.Errorf("expected bob to be mentioned as 'user', got %q", kinds[bob.ID])
+	}
+	if kinds[charlie.ID] != "user" {
+		t.Errorf("expected charlie to be mentioned as 'user', got %q", kinds[charlie.ID])
+	}
+	if _, ok := kinds[dave.ID]; ok {
+		t.Error("expected dave (non-member) to not be mentioned")
+	}
+
+	// Let's test a message with only @channel and @here
+	msg2, _, err := s.CreateMessage(ctx, MessageInput{
+		ChannelID: ch.ID,
+		UserID:    alice.ID,
+		Body:      "Hi @here @channel",
+		IsOnline:  isOnline,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mentionsList2, err := s.GetMessageMentions(ctx, msg2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kinds2 := make(map[int64]string)
+	for _, m := range mentionsList2 {
+		kinds2[m.UserID] = m.Kind
+	}
+
+	// bob is online -> "here" (priority over "channel")
+	// charlie is offline -> "channel"
+	if kinds2[bob.ID] != "here" {
+		t.Errorf("expected bob to be 'here', got %q", kinds2[bob.ID])
+	}
+	if kinds2[charlie.ID] != "channel" {
+		t.Errorf("expected charlie to be 'channel', got %q", kinds2[charlie.ID])
+	}
+}
+
