@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
+	"github.com/0funct0ry/hivemind/internal/realtime"
 	"github.com/0funct0ry/hivemind/internal/store"
 	"github.com/gin-gonic/gin"
 )
@@ -279,5 +280,66 @@ func channelRemoveMember(s *store.Store) gin.HandlerFunc {
 			return
 		}
 		c.Status(204)
+	}
+}
+
+// Client contract: the unread divider position is decided by
+// the client from last_read_message_id at channel-open time and frozen until the channel is
+// left. The server never tells the client where to draw the line mid-session.
+func channelRead(s *store.Store, h *realtime.Hub) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		me, _ := CurrentUser(c)
+		ch, access, ok := resolveChannel(c, s, me.ID)
+		if !ok {
+			return
+		}
+		if !access.CanRead {
+			httpx.Fail(c, 404, "channel_not_found", "Channel not found.")
+			return
+		}
+
+		var in struct {
+			MessageID string `json:"message_id"`
+		}
+		if err := c.ShouldBindJSON(&in); err != nil {
+			httpx.Fail(c, 400, "invalid_request", "Invalid request body.")
+			return
+		}
+
+		msgID, err := strconv.ParseInt(in.MessageID, 10, 64)
+		if err != nil {
+			httpx.Fail(c, 400, "invalid_message_id", "Invalid message ID.")
+			return
+		}
+
+		if err := s.MarkRead(c.Request.Context(), me.ID, ch.ID, msgID); err != nil {
+			httpx.Fail(c, 500, "internal_error", "Could not mark read.")
+			return
+		}
+
+		// Fan out read.updated to other connections of the same user
+		h.Publish(realtime.Event{
+			Type:        "read.updated",
+			Payload: map[string]string{
+				"channel_id":           strconv.FormatInt(ch.ID, 10),
+				"last_read_message_id": in.MessageID,
+			},
+			UserID:      me.ID,
+			ExcludeUser: me.ID,
+		})
+
+		c.Status(204)
+	}
+}
+
+func unreadSummary(s *store.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		me, _ := CurrentUser(c)
+		summary, err := s.UnreadSummary(c.Request.Context(), me.ID)
+		if err != nil {
+			httpx.Fail(c, 500, "internal_error", "Could not get unread summary.")
+			return
+		}
+		c.JSON(200, gin.H{"data": summary})
 	}
 }

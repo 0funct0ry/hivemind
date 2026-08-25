@@ -135,10 +135,16 @@ func (h *Hub) handleRegister(ctx context.Context, conn *Conn) {
 		anyChannels[i] = c
 	}
 
+	// Fetch unread summary for the hello payload
+	unreads, err := h.store.UnreadSummary(ctx, conn.User.ID)
+	if err != nil {
+		slog.Error("failed to get unread summary for hello payload", "user_id", conn.User.ID, "error", err)
+	}
+
 	helloPayload := HelloPayload{
 		User:              userPayload,
 		Channels:          anyChannels,
-		UnreadSummary:     map[string]any{}, // Placeholder for M11
+		UnreadSummary:     unreads,
 		ServerTime:        time.Now().UnixMilli(),
 		HeartbeatInterval: int(pingPeriod / time.Millisecond),
 	}

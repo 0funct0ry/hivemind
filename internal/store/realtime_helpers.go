@@ -34,16 +34,3 @@ func (s *Store) GetChannelMemberIDs(ctx context.Context, channelID int64) ([]int
 	}
 	return ids, rows.Err()
 }
-
-// MarkRead updates the last read message ID for a user in a channel.
-func (s *Store) MarkRead(ctx context.Context, userID, channelID, messageID int64) error {
-	_, err := s.writer.ExecContext(ctx, `
-		UPDATE channel_members 
-		SET last_read_message_id = MAX(last_read_message_id, ?) 
-		WHERE channel_id = ? AND user_id = ?`,
-		messageID, channelID, userID)
-	if err != nil {
-		return fmt.Errorf("mark read: %w", err)
-	}
-	return nil
-}

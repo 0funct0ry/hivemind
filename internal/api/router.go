@@ -133,11 +133,14 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 
 	v1.GET("/channels/:id/messages", messageList(s))
 	v1.POST("/channels/:id/messages", messageCreate(s, h))
+	v1.POST("/channels/:id/read", channelRead(s, h))
 	v1.GET("/messages/:id", messageGet(s))
 	v1.GET("/messages/:id/replies", messageListReplies(s))
 
 	v1.GET("/dms", dmList(s))
 	v1.POST("/dms", dmCreate(s))
+
+	v1.GET("/unreads", unreadSummary(s))
 
 	v1.GET("/ws", wsUpgrade(h, s, cfg))
 
