@@ -84,9 +84,19 @@ func maxWaitIf(v []time.Time, n time.Time, limit int) time.Duration {
 func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	r := gin.New()
 	r.Use(httpx.RequestID(), httpx.Recovery(slog.Default()))
+	b, _ := newBootstrap(s)
+	if b == nil {
+		b = &bootstrap{}
+	}
+	if b != nil && b.token != "" {
+		printSetupURL(cfg.Addr, b.token)
+	}
+	r.GET("/setup", setupPage(b))
 	lim := newLimiter()
 	v1 := r.Group("/api/v1")
 	v1.POST("/auth/login", login(s, a, cfg, lim))
+	v1.POST("/setup", setupCreate(s, a, b))
+	v1.Use(b.gate(s))
 	v1.Use(RequireAuth(a, cfg))
 	v1.POST("/auth/logout", sessionOnly, logout(a, cfg))
 	v1.GET("/auth/me", me(cfg))
@@ -94,6 +104,11 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/tokens", tokenList(s))
 	v1.POST("/tokens", tokenCreate(a))
 	v1.DELETE("/tokens/:id", tokenDelete(s))
+	v1.GET("/users", userList(s))
+	v1.GET("/users/:id", userGet(s))
+	v1.PATCH("/users/me", userMe(s))
+	v1.POST("/users", RequireAdmin(), userCreate(s))
+	v1.POST("/users/:id/deactivate", RequireAdmin(), userDeactivate(s))
 	return r
 }
 
