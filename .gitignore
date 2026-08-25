@@ -34,6 +34,7 @@ go.work.sum
 # Kept out of the repo intentionally (see CLAUDE.md)
 internal-docs/
 .claude/
+.agents/
 
 # hivemind build output and runtime state
 /bin/
@@ -48,3 +49,4 @@ dist/
 web/dist/
 docs/dist/
 data/
+

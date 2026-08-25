@@ -109,6 +109,17 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.PATCH("/users/me", userMe(s))
 	v1.POST("/users", RequireAdmin(), userCreate(s))
 	v1.POST("/users/:id/deactivate", RequireAdmin(), userDeactivate(s))
+
+	v1.GET("/channels", channelList(s))
+	v1.POST("/channels", channelCreate(s))
+	v1.GET("/channels/:id", channelGet(s))
+	v1.PATCH("/channels/:id", channelUpdate(s))
+	v1.POST("/channels/:id/join", channelJoin(s))
+	v1.POST("/channels/:id/leave", channelLeave(s))
+	v1.GET("/channels/:id/members", channelMembersList(s))
+	v1.POST("/channels/:id/members", channelAddMembers(s))
+	v1.DELETE("/channels/:id/members/:uid", channelRemoveMember(s))
+
 	return r
 }
 

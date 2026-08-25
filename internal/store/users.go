@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"net/mail"
@@ -70,6 +72,26 @@ func (s *Store) CreateUser(ctx context.Context, in UserInput) (User, error) {
 	if err != nil {
 		return User{}, fmt.Errorf("get created user id: %w", err)
 	}
+
+	// Auto-join/create #general
+	var generalID int64
+	err = s.reader.QueryRowContext(ctx, "SELECT id FROM channels WHERE slug = 'general'").Scan(&generalID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err = s.CreateChannel(ctx, "public", "general", "general", "General discussion", id, []int64{id})
+			if err != nil {
+				return User{}, fmt.Errorf("seed general channel: %w", err)
+			}
+		} else {
+			return User{}, fmt.Errorf("lookup general channel: %w", err)
+		}
+	} else {
+		err = s.AddMembers(ctx, generalID, []int64{id})
+		if err != nil {
+			return User{}, fmt.Errorf("join general channel: %w", err)
+		}
+	}
+
 	return s.GetUserByID(ctx, id)
 }
 
