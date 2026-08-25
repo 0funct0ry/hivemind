@@ -53,6 +53,7 @@ type MessageInput struct {
 var (
 	ErrThreadChannelMismatch = errors.New("thread_channel_mismatch")
 	ErrThreadDeleted         = errors.New("thread_deleted")
+	ErrUserDeactivated       = errors.New("user_deactivated")
 )
 
 // isUniqueConstraintError checks if an error is a SQLite unique constraint violation.
@@ -82,6 +83,31 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 	var existed bool
 
 	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		// DM check: block posting if peer is deactivated
+		var kind string
+		err := tx.QueryRowContext(ctx, "SELECT kind FROM channels WHERE id = ?", in.ChannelID).Scan(&kind)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("query channel kind: %w", err)
+		}
+
+		if kind == "dm" {
+			var peerDeactivated bool
+			err = tx.QueryRowContext(ctx, `
+				SELECT EXISTS(
+					SELECT 1 FROM channel_members cm
+					JOIN users u ON cm.user_id = u.id
+					WHERE cm.channel_id = ? AND cm.user_id != ? AND u.status = 'deactivated'
+				)`, in.ChannelID, in.UserID).Scan(&peerDeactivated)
+			if err != nil {
+				return fmt.Errorf("check peer deactivation: %w", err)
+			}
+			if peerDeactivated {
+				return ErrUserDeactivated
+			}
+		}
 		// Thread replies validation
 		var rootID int64
 		if in.ThreadID != nil {

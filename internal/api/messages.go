@@ -57,7 +57,7 @@ func publicMessage(m store.Message) gin.H {
 			"is_bot":       m.User.IsBot,
 		}
 	}
-	
+
 	atts := make([]gin.H, 0, len(m.Attachments))
 	for _, a := range m.Attachments {
 		attVal := gin.H{
@@ -178,6 +178,10 @@ func messageCreate(s *store.Store) gin.HandlerFunc {
 			}
 			if errors.Is(err, store.ErrThreadDeleted) {
 				httpx.Fail(c, 400, "thread_deleted", "Cannot reply to a deleted thread.")
+				return
+			}
+			if errors.Is(err, store.ErrUserDeactivated) {
+				httpx.Fail(c, 400, "user_deactivated", "Cannot post to a DM containing a deactivated user.")
 				return
 			}
 			httpx.Fail(c, 400, "invalid_message", err.Error())

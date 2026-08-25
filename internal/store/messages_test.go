@@ -346,7 +346,7 @@ func TestThreads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	hasRoot := false
 	hasBroadcast := false
 	hasReply1 := false

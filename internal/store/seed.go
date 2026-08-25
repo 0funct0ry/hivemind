@@ -145,7 +145,7 @@ func (s *Store) Seed(ctx context.Context, numUsers, numChannels, numMessages int
 		for i := 0; i < numMessages; i++ {
 			// Pick a day in the last 30 days
 			daysAgo := rng.Intn(30)
-			
+
 			// Pick hour of the day using diurnal weights
 			val := rng.Intn(totalWeight)
 			hour := 0

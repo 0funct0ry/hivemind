@@ -34,6 +34,7 @@ type ChannelDetails struct {
 	MemberCount       int   `json:"member_count"`
 	LastReadMessageID int64 `json:"last_read_message_id"`
 	Joined            bool  `json:"joined"`
+	Peer              *User `json:"peer,omitempty"`
 }
 
 // ChannelMember represents a user's membership in a channel.

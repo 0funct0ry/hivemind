@@ -39,7 +39,7 @@ func TestMessageAPI(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("expected 200, got %d", code)
 	}
-	
+
 	// 3. Auto-join: Post to pubCh as uNonMember (not a member yet)
 	bodyNonMember := map[string]any{"body": "Hello as guest!"}
 	code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sNonMember, bodyNonMember)

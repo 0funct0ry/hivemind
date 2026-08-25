@@ -125,6 +125,9 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/messages/:id", messageGet(s))
 	v1.GET("/messages/:id/replies", messageListReplies(s))
 
+	v1.GET("/dms", dmList(s))
+	v1.POST("/dms", dmCreate(s))
+
 	return r
 }
 
