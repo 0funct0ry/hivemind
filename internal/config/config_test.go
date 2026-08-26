@@ -44,6 +44,46 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 }
 
+// TestLoadMultiWordFlagNames guards against a bug where multi-word flags
+// (registered with dashes, e.g. --data-dir) never actually reached their
+// underscore/dotted viper key (e.g. "data_dir"), so serve/user commands
+// silently ignored --data-dir and fell back to the default.
+func TestLoadMultiWordFlagNames(t *testing.T) {
+	dir := t.TempDir()
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+
+	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	flags.String("data-dir", "./data", "")
+	flags.String("tls-cert", "", "")
+	flags.String("workspace-name", "Hivemind", "")
+	if err := flags.Set("data-dir", "/tmp/hm-flag-test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := flags.Set("tls-cert", "flag-cert.pem"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(flags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Config.DataDir != "/tmp/hm-flag-test" || loaded.Sources["data_dir"] != SourceFlag {
+		t.Fatalf("--data-dir flag should win: %#v, source=%v", loaded.Config.DataDir, loaded.Sources["data_dir"])
+	}
+	if loaded.Config.TLS.Cert != "flag-cert.pem" || loaded.Sources["tls.cert"] != SourceFlag {
+		t.Fatalf("--tls-cert flag should win: %#v, source=%v", loaded.Config.TLS.Cert, loaded.Sources["tls.cert"])
+	}
+	if loaded.Config.WorkspaceName != "Hivemind" || loaded.Sources["workspace_name"] != SourceDefault {
+		t.Fatalf("unset --workspace-name should fall back to default: %#v, source=%v", loaded.Config.WorkspaceName, loaded.Sources["workspace_name"])
+	}
+}
+
 func TestConfigSearchOrderAndMissing(t *testing.T) {
 	dir := t.TempDir()
 	original, _ := os.Getwd()

@@ -1,0 +1,87 @@
+import { useMutation } from '@tanstack/react-query'
+import { useState, type FormEvent } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { ApiError, api } from '../lib/api'
+
+export function Setup() {
+  const [params] = useSearchParams()
+  const token = params.get('token') ?? ''
+  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const navigate = useNavigate()
+
+  const mutation = useMutation({
+    mutationFn: () => api.setup(token, username, email, password),
+    onSuccess: () => navigate('/login', { replace: true }),
+  })
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    mutation.mutate()
+  }
+
+  if (!token) {
+    return (
+      <div className="flex h-full items-center justify-center bg-paper">
+        <p className="text-ink-2">This setup link is missing a token.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center bg-paper">
+      <form
+        onSubmit={onSubmit}
+        className="w-full max-w-sm rounded-lg border border-rule bg-white p-8 shadow-sm"
+      >
+        <h1 className="mb-1 font-display text-2xl font-semibold text-ink">Set up hivemind</h1>
+        <p className="mb-6 text-sm text-ink-2">Create the first admin account for this workspace.</p>
+
+        <label className="mb-3 block text-sm text-ink-2">
+          Username
+          <input
+            className="mt-1 w-full rounded border border-rule bg-paper px-3 py-2 text-ink outline-none focus:border-teal"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoFocus
+          />
+        </label>
+
+        <label className="mb-3 block text-sm text-ink-2">
+          Email
+          <input
+            type="email"
+            className="mt-1 w-full rounded border border-rule bg-paper px-3 py-2 text-ink outline-none focus:border-teal"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </label>
+
+        <label className="mb-4 block text-sm text-ink-2">
+          Password
+          <input
+            type="password"
+            className="mt-1 w-full rounded border border-rule bg-paper px-3 py-2 text-ink outline-none focus:border-teal"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </label>
+
+        {mutation.isError && (
+          <p className="mb-4 text-sm text-red-700">
+            {mutation.error instanceof ApiError ? mutation.error.message : 'Something went wrong.'}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={mutation.isPending}
+          className="w-full rounded bg-teal px-3 py-2 font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+        >
+          {mutation.isPending ? 'Creating workspace…' : 'Create workspace'}
+        </button>
+      </form>
+    </div>
+  )
+}

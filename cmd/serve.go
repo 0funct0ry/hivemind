@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/0funct0ry/hivemind/internal/config"
 	"github.com/0funct0ry/hivemind/internal/logging"
 	"github.com/0funct0ry/hivemind/internal/store"
+	"github.com/0funct0ry/hivemind/internal/web"
+	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 )
 
@@ -94,6 +97,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}()
 	h := api.NewRouter(s, a, loaded.Config)
+	webHandler, err := web.Handler(loaded.Config.Dev, loaded.Config.DevProxy)
+	if err != nil {
+		return fmt.Errorf("build web handler: %w", err)
+	}
+	h.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "not_found", "message": "No such endpoint.", "field": nil}})
+			return
+		}
+		webHandler.ServeHTTP(c.Writer, c.Request)
+	})
 	server := &http.Server{Addr: loaded.Config.Addr, Handler: h}
 	go func() {
 		<-ctx.Done()

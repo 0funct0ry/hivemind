@@ -86,8 +86,14 @@ func Load(flags *pflag.FlagSet) (*Loaded, error) {
 		v.SetDefault(key, value)
 	}
 	if flags != nil {
-		if err := v.BindPFlags(flags); err != nil {
-			return nil, fmt.Errorf("bind config flags: %w", err)
+		for _, key := range configKeys {
+			f := flags.Lookup(flagNameForKey(key))
+			if f == nil {
+				continue
+			}
+			if err := v.BindPFlag(key, f); err != nil {
+				return nil, fmt.Errorf("bind config flag %s: %w", f.Name, err)
+			}
 		}
 	}
 
@@ -160,8 +166,15 @@ func decode(v *viper.Viper) (Config, error) {
 	}, nil
 }
 
+// flagNameForKey maps a viper config key (dot-nested, snake_case) to the
+// dash-separated flag name it's registered under, e.g. "data_dir" ->
+// "data-dir" and "tls.cert" -> "tls-cert".
+func flagNameForKey(key string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(key, ".", "-"), "_", "-")
+}
+
 func valueSource(v *viper.Viper, flags *pflag.FlagSet, key string) Source {
-	flagName := strings.ReplaceAll(key, ".", "-")
+	flagName := flagNameForKey(key)
 	if flags != nil {
 		if flag := flags.Lookup(flagName); flag != nil && flag.Changed {
 			return SourceFlag

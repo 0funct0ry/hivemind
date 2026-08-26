@@ -45,8 +45,13 @@ internal-docs/
 
 # node / frontend build output
 node_modules/
-dist/
 web/dist/
 docs/dist/
 data/
+
+# internal/web/dist holds the built frontend, go:embed'd into the binary.
+# Keep a placeholder index.html tracked so the package compiles on a fresh
+# checkout before `make ui` has run; ignore everything else generated there.
+internal/web/dist/*
+!internal/web/dist/index.html
 

@@ -62,16 +62,6 @@ func (b *bootstrap) gate(s *store.Store) gin.HandlerFunc {
 		c.Next()
 	}
 }
-func setupPage(b *bootstrap) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if !b.valid(c.Query("token")) {
-			c.String(404, "setup link is invalid or expired")
-			return
-		}
-		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(200, `<!doctype html><html><body><h1>Set up Hivemind</h1><form method="post" action="/api/v1/setup"><input name="username" placeholder="Username"><input name="email" type="email" placeholder="Email"><input name="password" type="password" placeholder="Password"><input type="hidden" name="token" value="`+c.Query("token")+`"><button>Create workspace</button></form></body></html>`)
-	}
-}
 func setupCreate(s *store.Store, a *auth.Service, b *bootstrap) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in struct {

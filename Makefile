@@ -24,9 +24,9 @@ help:
 	@echo "Targets:"
 	@sed -n 's/^##//p' $(MAKEFILE_LIST) | column -t -s ':' |  sed -e 's/^/ /'
 
-## build: Build the binary
+## build: Build the frontend, then the binary
 .PHONY: build
-build:
+build: ui
 	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(BINARY_NAME) $(MAIN_PACKAGE)
 
 ## run: Build and run the server
@@ -34,10 +34,10 @@ build:
 run: build
 	./bin/$(BINARY_NAME) serve
 
-## ui: Build the web frontend (no-op until web/ exists)
+## ui: Build the web frontend into internal/web/dist
 .PHONY: ui
 ui:
-	@if [ -d web ]; then cd web && npm install && npm run build; else echo "no web/ directory yet, skipping"; fi
+	cd web && npm install && npm run build
 
 ## clean: Remove build artifacts
 .PHONY: clean

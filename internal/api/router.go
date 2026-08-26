@@ -101,7 +101,6 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	if b != nil && b.token != "" {
 		printSetupURL(cfg.Addr, b.token)
 	}
-	r.GET("/setup", setupPage(b))
 	lim := newLimiter()
 
 	// Instantiate and run the Realtime Hub
@@ -345,7 +344,7 @@ func tokenCreate(a *auth.Service) gin.HandlerFunc {
 			ExpiresIn string `json:"expires_in"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
-			httpx.Fail(c, 400, "invalid_request", "Invalid request payload: " + err.Error())
+			httpx.Fail(c, 400, "invalid_request", "Invalid request payload: "+err.Error())
 			return
 		}
 		if in.Name == "" {

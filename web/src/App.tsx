@@ -1,0 +1,20 @@
+import { Navigate, Route, Routes } from 'react-router-dom'
+import { ChannelView, DmView, NoChannelSelected } from './routes/ChannelView'
+import { AppShell } from './routes/AppShell'
+import { Login } from './routes/Login'
+import { Setup } from './routes/Setup'
+
+export function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/setup" element={<Setup />} />
+      <Route path="/" element={<AppShell />}>
+        <Route index element={<NoChannelSelected />} />
+        <Route path="c/:slug" element={<ChannelView />} />
+        <Route path="dm/:username" element={<DmView />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
