@@ -52,13 +52,27 @@ func TestAPISearch(t *testing.T) {
 		}
 
 		var res struct {
-			Data []store.Hit `json:"data"`
+			Data []struct {
+				Message struct {
+					ID string `json:"id"`
+				} `json:"message"`
+				Channel struct {
+					ID string `json:"id"`
+				} `json:"channel"`
+				Snippet string `json:"snippet"`
+			} `json:"data"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
 			t.Fatal(err)
 		}
 		if len(res.Data) != 1 {
 			t.Errorf("Expected 1 hit, got %d", len(res.Data))
+		}
+		if res.Data[0].Message.ID == "" {
+			t.Error("expected message.id to be a non-empty string id")
+		}
+		if res.Data[0].Channel.ID == "" {
+			t.Error("expected channel.id to be a non-empty string id")
 		}
 	})
 

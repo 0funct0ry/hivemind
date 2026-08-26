@@ -191,7 +191,7 @@ export function Composer({
           }}
           placeholder={placeholder ?? 'Message'}
           rows={1}
-          className="w-full resize-none bg-transparent px-3 py-2 text-sm text-ink outline-none"
+          className="w-full resize-none bg-transparent px-3 py-2 text-sm text-ink"
         />
         <div className="flex items-center justify-between px-3 pb-2">
           <div className="flex items-center gap-2">

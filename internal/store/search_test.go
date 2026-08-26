@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -206,13 +209,13 @@ func TestGetChannelActivity(t *testing.T) {
 	defer func() { nowMillis = func() int64 { return time.Now().UnixMilli() } }()
 
 	nowMillis = func() int64 { return from + 2*time.Hour.Milliseconds() }
-	_, _, err = s.CreateMessage(ctx, MessageInput{ChannelID: ch1.ID, UserID: u1.ID, Body: "Msg 1"})
+	m1, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch1.ID, UserID: u1.ID, Body: "Msg 1"})
 	if err != nil {
 		t.Fatalf("Failed to create Msg 1: %v", err)
 	}
 
 	nowMillis = func() int64 { return from + 5*time.Hour.Milliseconds() }
-	_, _, err = s.CreateMessage(ctx, MessageInput{ChannelID: ch1.ID, UserID: u1.ID, Body: "Msg 2"})
+	m2, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch1.ID, UserID: u1.ID, Body: "Msg 2"})
 	if err != nil {
 		t.Fatalf("Failed to create Msg 2: %v", err)
 	}
@@ -227,5 +230,35 @@ func TestGetChannelActivity(t *testing.T) {
 	}
 	if activity.Counts[5] != 1 {
 		t.Errorf("Expected 1 message in bucket 5, got %d", activity.Counts[5])
+	}
+
+	// bucket_message_ids: non-empty buckets carry the MIN(id) of their bucket, empty
+	// buckets are nil.
+	if len(activity.BucketMessageIDs) != 24 {
+		t.Fatalf("expected 24 bucket_message_ids entries, got %d", len(activity.BucketMessageIDs))
+	}
+	if activity.BucketMessageIDs[2] == nil || *activity.BucketMessageIDs[2] != strconv.FormatInt(m1.ID, 10) {
+		t.Errorf("expected bucket 2 message id %d, got %v", m1.ID, activity.BucketMessageIDs[2])
+	}
+	if activity.BucketMessageIDs[5] == nil || *activity.BucketMessageIDs[5] != strconv.FormatInt(m2.ID, 10) {
+		t.Errorf("expected bucket 5 message id %d, got %v", m2.ID, activity.BucketMessageIDs[5])
+	}
+	if activity.BucketMessageIDs[0] != nil {
+		t.Errorf("expected empty bucket 0 to have a nil message id, got %v", *activity.BucketMessageIDs[0])
+	}
+
+	// message_id fields (mentions/unread_boundary) must marshal as JSON strings, matching
+	// the rest of the API's int64-id-as-string convention, not as bare JSON numbers.
+	activity.Mentions = []MentionHit{{Bucket: 2, MessageID: m1.ID}}
+	raw, err := json.Marshal(activity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"message_id":"` + strconv.FormatInt(m1.ID, 10) + `"`
+	if !strings.Contains(string(raw), want) {
+		t.Errorf("expected marshaled activity to contain %s, got %s", want, raw)
+	}
+	if strings.Contains(string(raw), `"message_id":`+strconv.FormatInt(m1.ID, 10)+`}`) {
+		t.Errorf("message_id must not marshal as a bare JSON number: %s", raw)
 	}
 }

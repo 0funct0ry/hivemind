@@ -21,7 +21,7 @@ func userList(s *store.Store) gin.HandlerFunc {
 				chID = &val
 			}
 		}
-		users, err := s.AutocompleteUsers(c, c.Query("q"), chID, limit)
+		users, err := s.AutocompleteUsers(c.Request.Context(), c.Query("q"), chID, limit)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not list users.")
 			return
@@ -40,7 +40,7 @@ func userGet(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 404, "not_found", "User not found.")
 			return
 		}
-		u, err := s.GetUserByID(c, id)
+		u, err := s.GetUserByID(c.Request.Context(), id)
 		if errors.Is(err, sql.ErrNoRows) {
 			httpx.Fail(c, 404, "not_found", "User not found.")
 			return
@@ -62,7 +62,7 @@ func userMe(s *store.Store) gin.HandlerFunc {
 			return
 		}
 		u, _ := CurrentUser(c)
-		if err := s.UpdateDisplayName(c, u.ID, in.DisplayName); err != nil {
+		if err := s.UpdateDisplayName(c.Request.Context(), u.ID, in.DisplayName); err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not update user.")
 			return
 		}
@@ -91,7 +91,7 @@ func userCreate(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 500, "internal_error", "Could not hash password.")
 			return
 		}
-		u, err := s.CreateUser(c, store.UserInput{Username: in.Username, Email: in.Email, DisplayName: in.DisplayName, PasswordHash: h})
+		u, err := s.CreateUser(c.Request.Context(), store.UserInput{Username: in.Username, Email: in.Email, DisplayName: in.DisplayName, PasswordHash: h})
 		if err != nil {
 			httpx.Fail(c, 400, "invalid_user", err.Error())
 			return
@@ -111,7 +111,7 @@ func userDeactivate(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 400, "cannot_deactivate_self", "You cannot deactivate yourself.")
 			return
 		}
-		u, err := s.GetUserByID(c, id)
+		u, err := s.GetUserByID(c.Request.Context(), id)
 		if errors.Is(err, sql.ErrNoRows) {
 			httpx.Fail(c, 404, "not_found", "User not found.")
 			return
@@ -121,7 +121,7 @@ func userDeactivate(s *store.Store) gin.HandlerFunc {
 			return
 		}
 		if u.Role == "admin" {
-			n, err := s.CountAdmins(c)
+			n, err := s.CountAdmins(c.Request.Context())
 			if err != nil {
 				httpx.Fail(c, 500, "internal_error", "Could not count administrators.")
 				return
@@ -131,7 +131,7 @@ func userDeactivate(s *store.Store) gin.HandlerFunc {
 				return
 			}
 		}
-		if err := s.Deactivate(c, id); err != nil {
+		if err := s.Deactivate(c.Request.Context(), id); err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not deactivate user.")
 			return
 		}

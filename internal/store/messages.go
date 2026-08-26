@@ -404,49 +404,10 @@ func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	return messages[0], nil
 }
 
-// ListChannelMessages retrieves root messages in a channel using cursor-based pagination.
-func (s *Store) ListChannelMessages(ctx context.Context, channelID int64, before, after *int64, limit int) ([]Message, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 200 {
-		limit = 200
-	}
+const channelMessageColumns = `id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at`
 
-	var query string
-	var args []any
-	args = append(args, channelID)
-	var reverse bool
-
-	if before != nil {
-		query = `
-			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
-			FROM messages
-			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1) AND id < ?
-			ORDER BY id DESC
-			LIMIT ?`
-		args = append(args, *before, limit)
-		reverse = true
-	} else if after != nil {
-		query = `
-			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
-			FROM messages
-			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1) AND id > ?
-			ORDER BY id ASC
-			LIMIT ?`
-		args = append(args, *after, limit)
-		reverse = false
-	} else {
-		query = `
-			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
-			FROM messages
-			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1)
-			ORDER BY id DESC
-			LIMIT ?`
-		args = append(args, limit)
-		reverse = true
-	}
-
+// queryChannelMessages runs a channel-message query and scans the results, unhydrated.
+func (s *Store) queryChannelMessages(ctx context.Context, query string, args ...any) ([]Message, error) {
 	rows, err := s.reader.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list channel messages query: %w", err)
@@ -484,8 +445,84 @@ func (s *Store) ListChannelMessages(ctx context.Context, channelID int64, before
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	return messages, nil
+}
 
-	if reverse {
+// ListChannelMessages retrieves root messages in a channel using cursor-based pagination.
+// When around is non-nil, before/after are ignored and the result is a symmetric window
+// of up to limit/2 messages on either side of the anchor id (inclusive of the anchor).
+func (s *Store) ListChannelMessages(ctx context.Context, channelID int64, before, after, around *int64, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	var messages []Message
+	var err error
+
+	switch {
+	case around != nil:
+		half := limit / 2
+		if half < 1 {
+			half = 1
+		}
+		older, err2 := s.queryChannelMessages(ctx, `
+			SELECT `+channelMessageColumns+`
+			FROM messages
+			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1) AND id <= ?
+			ORDER BY id DESC
+			LIMIT ?`, channelID, *around, half+1)
+		if err2 != nil {
+			return nil, err2
+		}
+		for i, j := 0, len(older)-1; i < j; i, j = i+1, j-1 {
+			older[i], older[j] = older[j], older[i]
+		}
+		newer, err2 := s.queryChannelMessages(ctx, `
+			SELECT `+channelMessageColumns+`
+			FROM messages
+			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1) AND id > ?
+			ORDER BY id ASC
+			LIMIT ?`, channelID, *around, half)
+		if err2 != nil {
+			return nil, err2
+		}
+		messages = append(older, newer...)
+	case before != nil:
+		messages, err = s.queryChannelMessages(ctx, `
+			SELECT `+channelMessageColumns+`
+			FROM messages
+			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1) AND id < ?
+			ORDER BY id DESC
+			LIMIT ?`, channelID, *before, limit)
+		if err != nil {
+			return nil, err
+		}
+		for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+			messages[i], messages[j] = messages[j], messages[i]
+		}
+	case after != nil:
+		messages, err = s.queryChannelMessages(ctx, `
+			SELECT `+channelMessageColumns+`
+			FROM messages
+			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1) AND id > ?
+			ORDER BY id ASC
+			LIMIT ?`, channelID, *after, limit)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		messages, err = s.queryChannelMessages(ctx, `
+			SELECT `+channelMessageColumns+`
+			FROM messages
+			WHERE channel_id = ? AND (thread_id IS NULL OR broadcast = 1)
+			ORDER BY id DESC
+			LIMIT ?`, channelID, limit)
+		if err != nil {
+			return nil, err
+		}
 		for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 			messages[i], messages[j] = messages[j], messages[i]
 		}

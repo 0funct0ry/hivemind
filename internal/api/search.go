@@ -105,14 +105,26 @@ func search(s *store.Store) gin.HandlerFunc {
 			nextBefore = &lastID
 		}
 
+		data := make([]gin.H, 0, len(hits))
+		for _, h := range hits {
+			data = append(data, gin.H{
+				"message": publicMessage(h.Message),
+				"channel": publicChannel(h.Channel),
+				"snippet": h.Snippet,
+			})
+		}
+
 		c.JSON(200, gin.H{
-			"data":        hits,
+			"data":        data,
 			"has_more":    hasMore,
 			"next_before": nextBefore,
 		})
 	}
 }
 
+// publicChannel renders a bare store.Channel with string-serialized ids, matching the
+// rest of the API's id-as-string convention (store.Channel's own json tags use raw
+// int64, which would otherwise leak numeric ids here).
 // resolveChannelID resolves a channel ID or a slug:slug string.
 func resolveChannelID(ctx context.Context, s *store.Store, param string) (int64, error) {
 	if id, err := strconv.ParseInt(param, 10, 64); err == nil {

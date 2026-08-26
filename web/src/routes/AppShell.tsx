@@ -1,8 +1,12 @@
 import { Navigate, Outlet } from 'react-router-dom'
 import { Sidebar } from '../components/Sidebar'
 import { ThreadPanel } from '../components/ThreadPanel'
+import { CommandPalette } from '../components/CommandPalette'
+import { SearchOverlay } from '../components/SearchOverlay'
+import { ShortcutsHelp } from '../components/ShortcutsHelp'
 import { useAuth } from '../hooks/useAuth'
 import { useRealtimeSync } from '../hooks/useRealtimeSync'
+import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
 import { useUiStore } from '../store/ui'
 
 function ConnectionStrip() {
@@ -18,6 +22,7 @@ function ConnectionStrip() {
 export function AppShell() {
   const { data, isLoading, isError } = useAuth()
   useRealtimeSync()
+  useGlobalShortcuts()
   const openThreadId = useUiStore((s) => s.openThreadId)
 
   if (isLoading) {
@@ -51,6 +56,9 @@ export function AppShell() {
           <ThreadPanel currentUsername={data.user.username} />
         </div>
       )}
+      <CommandPalette />
+      <SearchOverlay />
+      <ShortcutsHelp />
     </div>
   )
 }

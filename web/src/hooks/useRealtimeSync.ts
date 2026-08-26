@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { wsClient } from '../lib/ws'
 import { useUiStore } from '../store/ui'
+import { bumpActivityBucket } from '../components/PulseRuler'
 
 interface MessageCreatedPayload {
   channel_id: string
@@ -39,6 +40,7 @@ export function useRealtimeSync() {
       queryClient.invalidateQueries({ queryKey: ['messages', p.channel_id] })
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['unreads'] })
+      bumpActivityBucket(queryClient, p.channel_id)
     })
     const offThread = wsClient.on('thread.reply', (payload) => {
       const p = payload as ThreadReplyPayload

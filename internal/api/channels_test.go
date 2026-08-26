@@ -174,6 +174,68 @@ func TestAuthzMatrix(t *testing.T) {
 	})
 }
 
+// TestChannelIDsSerializeAsStrings guards against store.Channel's int64 id fields
+// leaking as bare JSON numbers through channelCreate/channelGet/channelUpdate — every
+// other channel-returning endpoint (channelList, channelJoin, ...) goes through
+// publicChannelDetails, which string-encodes ids; these three must match.
+func TestChannelIDsSerializeAsStrings(t *testing.T) {
+	tc := setupTestContext(t)
+	defer tc.close()
+
+	type channelIDResp struct {
+		Channel struct {
+			ID        string `json:"id"`
+			CreatedBy string `json:"created_by"`
+		} `json:"channel"`
+	}
+
+	// channelCreate
+	code, resp := tc.request("POST", "/api/v1/channels", tc.sMember, map[string]any{
+		"kind": "public", "slug": "id-string-check", "name": "ID String Check",
+	})
+	if code != 201 {
+		t.Fatalf("expected 201 creating channel, got %d. Resp: %s", code, resp)
+	}
+	var created channelIDResp
+	if err := json.Unmarshal([]byte(resp), &created); err != nil {
+		t.Fatalf("channelCreate response: channel.id did not unmarshal as a string: %v. Resp: %s", err, resp)
+	}
+	if created.Channel.ID == "" {
+		t.Error("channelCreate: expected a non-empty channel.id")
+	}
+	if created.Channel.CreatedBy == "" {
+		t.Error("channelCreate: expected a non-empty channel.created_by")
+	}
+
+	// channelGet
+	code, resp = tc.request("GET", "/api/v1/channels/"+created.Channel.ID, tc.sMember, nil)
+	if code != 200 {
+		t.Fatalf("expected 200 getting channel, got %d. Resp: %s", code, resp)
+	}
+	var got channelIDResp
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("channelGet response: channel.id did not unmarshal as a string: %v. Resp: %s", err, resp)
+	}
+	if got.Channel.ID != created.Channel.ID {
+		t.Errorf("channelGet: expected channel.id %q, got %q", created.Channel.ID, got.Channel.ID)
+	}
+
+	// channelUpdate
+	code, resp = tc.request("PATCH", "/api/v1/channels/"+created.Channel.ID, tc.sMember, map[string]any{
+		"name": "Renamed", "topic": "New topic",
+	})
+	if code != 200 {
+		t.Fatalf("expected 200 updating channel, got %d. Resp: %s", code, resp)
+	}
+	var updated channelIDResp
+	if err := json.Unmarshal([]byte(resp), &updated); err != nil {
+		t.Fatalf("channelUpdate response: channel.id did not unmarshal as a string: %v. Resp: %s", err, resp)
+	}
+	if updated.Channel.ID != created.Channel.ID {
+		t.Errorf("channelUpdate: expected channel.id %q, got %q", created.Channel.ID, updated.Channel.ID)
+	}
+}
+
 func TestAdminCannotReadDM(t *testing.T) {
 	tc := setupTestContext(t)
 	defer tc.close()

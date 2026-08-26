@@ -50,6 +50,34 @@ func resolveChannel(c *gin.Context, s *store.Store, meID int64) (store.Channel, 
 	return ch, access, true
 }
 
+// publicChannel renders a bare store.Channel with string-serialized ids, matching the
+// rest of the API's id-as-string convention. store.Channel's own json tags leave id
+// fields as raw int64/*int64, which would otherwise leak numeric ids to callers that
+// (correctly, per every other endpoint) expect strings. Timestamps (created_at,
+// updated_at, archived_at) are left as JSON numbers — they're unix millis, not ids.
+func publicChannel(ch store.Channel) gin.H {
+	res := gin.H{
+		"id":              strconv.FormatInt(ch.ID, 10),
+		"kind":            ch.Kind,
+		"slug":            ch.Slug,
+		"name":            ch.Name,
+		"topic":           ch.Topic,
+		"dm_key":          ch.DMKey,
+		"created_by":      nil,
+		"archived_at":     ch.ArchivedAt,
+		"last_message_id": nil,
+		"created_at":      ch.CreatedAt,
+		"updated_at":      ch.UpdatedAt,
+	}
+	if ch.CreatedBy != nil {
+		res["created_by"] = strconv.FormatInt(*ch.CreatedBy, 10)
+	}
+	if ch.LastMessageID != nil {
+		res["last_message_id"] = strconv.FormatInt(*ch.LastMessageID, 10)
+	}
+	return res
+}
+
 func publicChannelDetails(ch store.ChannelDetails) gin.H {
 	res := gin.H{
 		"id":                   strconv.FormatInt(ch.ID, 10),
@@ -71,7 +99,7 @@ func publicChannelDetails(ch store.ChannelDetails) gin.H {
 func channelList(s *store.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		me, _ := CurrentUser(c)
-		list, err := s.ListVisibleChannels(c, me.ID)
+		list, err := s.ListVisibleChannels(c.Request.Context(), me.ID)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not list channels.")
 			return
@@ -98,12 +126,12 @@ func channelCreate(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 400, "invalid_request", "Invalid request body.")
 			return
 		}
-		ch, err := s.CreateChannel(c, in.Kind, in.Slug, in.Name, in.Topic, me.ID, in.MemberIDs)
+		ch, err := s.CreateChannel(c.Request.Context(), in.Kind, in.Slug, in.Name, in.Topic, me.ID, in.MemberIDs)
 		if err != nil {
 			httpx.Fail(c, 400, "invalid_channel", err.Error())
 			return
 		}
-		c.JSON(201, gin.H{"channel": ch})
+		c.JSON(201, gin.H{"channel": publicChannel(ch)})
 	}
 }
 
@@ -118,7 +146,7 @@ func channelGet(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 404, "channel_not_found", "Channel not found.")
 			return
 		}
-		c.JSON(200, gin.H{"channel": ch})
+		c.JSON(200, gin.H{"channel": publicChannel(ch)})
 	}
 }
 
@@ -145,16 +173,16 @@ func channelUpdate(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 400, "invalid_request", "Invalid request body.")
 			return
 		}
-		if err := s.UpdateChannel(c, ch.ID, in.Name, in.Topic); err != nil {
+		if err := s.UpdateChannel(c.Request.Context(), ch.ID, in.Name, in.Topic); err != nil {
 			httpx.Fail(c, 400, "invalid_channel", err.Error())
 			return
 		}
-		updated, err := s.GetChannel(c, ch.ID)
+		updated, err := s.GetChannel(c.Request.Context(), ch.ID)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not get updated channel.")
 			return
 		}
-		c.JSON(200, gin.H{"channel": updated})
+		c.JSON(200, gin.H{"channel": publicChannel(updated)})
 	}
 }
 
@@ -169,7 +197,7 @@ func channelJoin(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 404, "channel_not_found", "Channel not found.")
 			return
 		}
-		if err := s.AddMembers(c, ch.ID, []int64{me.ID}); err != nil {
+		if err := s.AddMembers(c.Request.Context(), ch.ID, []int64{me.ID}); err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not join channel.")
 			return
 		}
@@ -184,7 +212,7 @@ func channelLeave(s *store.Store) gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		isMem, err := s.IsMember(c, ch.ID, me.ID)
+		isMem, err := s.IsMember(c.Request.Context(), ch.ID, me.ID)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not check membership.")
 			return
@@ -193,7 +221,7 @@ func channelLeave(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 400, "not_member", "You are not a member of this channel.")
 			return
 		}
-		if err := s.RemoveMember(c, ch.ID, me.ID); err != nil {
+		if err := s.RemoveMember(c.Request.Context(), ch.ID, me.ID); err != nil {
 			httpx.Fail(c, 400, "cannot_leave", err.Error())
 			return
 		}
@@ -212,7 +240,7 @@ func channelMembersList(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 404, "channel_not_found", "Channel not found.")
 			return
 		}
-		members, err := s.ListMembers(c, ch.ID)
+		members, err := s.ListMembers(c.Request.Context(), ch.ID)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not list members.")
 			return
@@ -242,7 +270,7 @@ func channelAddMembers(s *store.Store) gin.HandlerFunc {
 		}
 
 		if ch.Kind == "public" {
-			isMem, err := s.IsMember(c, ch.ID, me.ID)
+			isMem, err := s.IsMember(c.Request.Context(), ch.ID, me.ID)
 			if err != nil || !isMem {
 				httpx.Fail(c, 403, "forbidden", "Must be a member to add others to a public channel.")
 				return
@@ -265,7 +293,7 @@ func channelAddMembers(s *store.Store) gin.HandlerFunc {
 			c.Status(204)
 			return
 		}
-		if err := s.AddMembers(c, ch.ID, in.UserIDs); err != nil {
+		if err := s.AddMembers(c.Request.Context(), ch.ID, in.UserIDs); err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not add members.")
 			return
 		}
@@ -297,7 +325,7 @@ func channelRemoveMember(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 400, "invalid_request", "Invalid user ID.")
 			return
 		}
-		if err := s.RemoveMember(c, ch.ID, uid); err != nil {
+		if err := s.RemoveMember(c.Request.Context(), ch.ID, uid); err != nil {
 			httpx.Fail(c, 400, "cannot_remove", err.Error())
 			return
 		}

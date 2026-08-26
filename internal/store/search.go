@@ -5,18 +5,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 // SearchQuery represents a parsed full-text search query with filters.
 type SearchQuery struct {
-	Text         string
-	ChannelID    *int64
-	FromUserID   *int64
-	Has          *string // "link" | "file" | "image"
-	Before       *int64
-	After        *int64
-	Limit        int
+	Text       string
+	ChannelID  *int64
+	FromUserID *int64
+	Has        *string // "link" | "file" | "image"
+	Before     *int64
+	After      *int64
+	Limit      int
 }
 
 // Hit represents a single search result.
@@ -354,25 +355,26 @@ func (s *Store) Search(ctx context.Context, userID int64, q SearchQuery) ([]Hit,
 
 // ActivityCounts contains aggregated message activity count per bucket.
 type ActivityCounts struct {
-	From           int64          `json:"from"`
-	To             int64          `json:"to"`
-	BucketMS       int64          `json:"bucket_ms"`
-	Counts         []int64        `json:"counts"`
-	Mentions       []MentionHit   `json:"mentions"`
-	UnreadBoundary *UnreadHit     `json:"unread_boundary,omitempty"`
-	Max            int64          `json:"max"`
+	From             int64        `json:"from"`
+	To               int64        `json:"to"`
+	BucketMS         int64        `json:"bucket_ms"`
+	Counts           []int64      `json:"counts"`
+	BucketMessageIDs []*string    `json:"bucket_message_ids"`
+	Mentions         []MentionHit `json:"mentions"`
+	UnreadBoundary   *UnreadHit   `json:"unread_boundary,omitempty"`
+	Max              int64        `json:"max"`
 }
 
 // MentionHit represents a mention event bucket.
 type MentionHit struct {
 	Bucket    int64 `json:"bucket"`
-	MessageID int64 `json:"message_id"`
+	MessageID int64 `json:"message_id,string"`
 }
 
 // UnreadHit represents the unread boundary bucket.
 type UnreadHit struct {
 	Bucket    int64 `json:"bucket"`
-	MessageID int64 `json:"message_id"`
+	MessageID int64 `json:"message_id,string"`
 }
 
 // GetChannelActivity calculates message activity bucketed over a time window.
@@ -386,9 +388,10 @@ func (s *Store) GetChannelActivity(ctx context.Context, userID, channelID, from,
 	}
 
 	counts := make([]int64, buckets)
+	bucketMessageIDs := make([]*string, buckets)
 
 	query := `
-		SELECT CAST((created_at - ?) / ? AS INTEGER) AS b, COUNT(*)
+		SELECT CAST((created_at - ?) / ? AS INTEGER) AS b, COUNT(*), MIN(id)
 		FROM messages
 		WHERE channel_id = ? AND created_at >= ? AND created_at < ? AND deleted_at IS NULL
 		GROUP BY b`
@@ -401,12 +404,16 @@ func (s *Store) GetChannelActivity(ctx context.Context, userID, channelID, from,
 
 	var maxVal int64
 	for rows.Next() {
-		var bucketIndex, count int64
-		if err := rows.Scan(&bucketIndex, &count); err != nil {
+		var bucketIndex, count, minID int64
+		if err := rows.Scan(&bucketIndex, &count, &minID); err != nil {
 			return ActivityCounts{}, fmt.Errorf("scan activity row: %w", err)
 		}
 		if bucketIndex >= 0 && bucketIndex < buckets {
 			counts[bucketIndex] = count
+			if count > 0 {
+				id := strconv.FormatInt(minID, 10)
+				bucketMessageIDs[bucketIndex] = &id
+			}
 			if count > maxVal {
 				maxVal = count
 			}
@@ -430,7 +437,7 @@ func (s *Store) GetChannelActivity(ctx context.Context, userID, channelID, from,
 	}
 	defer menRows.Close()
 
-	var mentions []MentionHit
+	mentions := []MentionHit{}
 	for menRows.Next() {
 		var msgID, createdAt int64
 		if err := menRows.Scan(&msgID, &createdAt); err != nil {
@@ -451,7 +458,7 @@ func (s *Store) GetChannelActivity(ctx context.Context, userID, channelID, from,
 		SELECT last_read_message_id
 		FROM channel_members
 		WHERE channel_id = ? AND user_id = ?`, channelID, userID).Scan(&lastReadMsgID)
-	
+
 	var unreadBoundary *UnreadHit
 	if err == nil && lastReadMsgID > 0 {
 		var nextUnreadMsgID, nextUnreadCreatedAt int64
@@ -471,12 +478,13 @@ func (s *Store) GetChannelActivity(ctx context.Context, userID, channelID, from,
 	}
 
 	return ActivityCounts{
-		From:           from,
-		To:             to,
-		BucketMS:       bucketMS,
-		Counts:         counts,
-		Mentions:       mentions,
-		UnreadBoundary: unreadBoundary,
-		Max:            maxVal,
+		From:             from,
+		To:               to,
+		BucketMS:         bucketMS,
+		Counts:           counts,
+		BucketMessageIDs: bucketMessageIDs,
+		Mentions:         mentions,
+		UnreadBoundary:   unreadBoundary,
+		Max:              maxVal,
 	}, nil
 }

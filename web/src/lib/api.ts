@@ -88,6 +88,32 @@ export interface Message {
   status?: 'sending' | 'failed'
 }
 
+export interface ActivityResponse {
+  from: number
+  to: number
+  bucket_ms: number
+  counts: number[]
+  bucket_message_ids: (string | null)[]
+  mentions: { bucket: number; message_id: string }[]
+  unread_boundary: { bucket: number; message_id: string } | null
+  max: number
+}
+
+export interface SearchChannel {
+  id: string
+  kind: 'public' | 'private' | 'dm'
+  slug: string | null
+  name: string
+  topic: string
+  last_message_id: string | null
+}
+
+export interface SearchHit {
+  message: Message
+  channel: SearchChannel
+  snippet: string
+}
+
 export interface UploadedFile {
   id: string
   sha256: string
@@ -153,13 +179,38 @@ export const api = {
   createDM: (userId: string) =>
     request<{ channel: DM }>('/dms', { method: 'POST', body: JSON.stringify({ user_id: userId }) }),
 
-  listMessages: (channelId: string, params: { before?: string; after?: string; limit?: number } = {}) => {
+  listMessages: (
+    channelId: string,
+    params: { before?: string; after?: string; around?: string; limit?: number } = {},
+  ) => {
     const qs = new URLSearchParams()
-    if (params.before) qs.set('before', params.before)
-    if (params.after) qs.set('after', params.after)
+    if (params.around) qs.set('around', params.around)
+    else {
+      if (params.before) qs.set('before', params.before)
+      if (params.after) qs.set('after', params.after)
+    }
     if (params.limit) qs.set('limit', String(params.limit))
     return request<{ data: Message[]; has_more: boolean; next_before: string }>(
       `/channels/${channelId}/messages?${qs.toString()}`,
+    )
+  },
+  getActivity: (channelId: string, params: { buckets?: number; from?: number; to?: number } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.buckets) qs.set('buckets', String(params.buckets))
+    if (params.from) qs.set('from', String(params.from))
+    if (params.to) qs.set('to', String(params.to))
+    return request<ActivityResponse>(`/channels/${channelId}/activity?${qs.toString()}`)
+  },
+  search: (params: { q: string; in?: string; from?: string; has?: string; before?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set('q', params.q)
+    if (params.in) qs.set('channel', params.in)
+    if (params.from) qs.set('from', params.from)
+    if (params.has) qs.set('has', params.has)
+    if (params.before) qs.set('before', params.before)
+    if (params.limit) qs.set('limit', String(params.limit))
+    return request<{ data: SearchHit[]; has_more: boolean; next_before: string | null }>(
+      `/search?${qs.toString()}`,
     )
   },
   createMessage: (

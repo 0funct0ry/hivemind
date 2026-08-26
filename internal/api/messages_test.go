@@ -124,6 +124,98 @@ func TestMessageAPI(t *testing.T) {
 	}
 }
 
+func TestMessageListAround(t *testing.T) {
+	tc := setupTestContext(t)
+	defer tc.close()
+
+	var ids []string
+	for i := 0; i < 6; i++ {
+		code, resp := tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sMember, map[string]any{"body": fmt.Sprintf("m%d", i)})
+		if code != 201 {
+			t.Fatalf("expected 201, got %d. Resp: %s", code, resp)
+		}
+		var posted struct {
+			Message struct {
+				ID string `json:"id"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(resp), &posted); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, posted.Message.ID)
+	}
+
+	type listResp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+
+	// A member gets a symmetric window around the anchor.
+	code, resp := tc.request("GET", fmt.Sprintf("/api/v1/channels/%d/messages?around=%s&limit=4", tc.pubCh.ID, ids[3]), tc.sMember, nil)
+	if code != 200 {
+		t.Fatalf("expected 200, got %d. Resp: %s", code, resp)
+	}
+	var lr listResp
+	if err := json.Unmarshal([]byte(resp), &lr); err != nil {
+		t.Fatal(err)
+	}
+	if len(lr.Data) == 0 {
+		t.Fatal("expected a non-empty window around the anchor")
+	}
+	found := false
+	for _, m := range lr.Data {
+		if m.ID == ids[3] {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected anchor message %s to be included in the around window", ids[3])
+	}
+
+	// around takes precedence over before/after when both are supplied.
+	code, resp = tc.request("GET", fmt.Sprintf("/api/v1/channels/%d/messages?around=%s&before=%s&limit=4", tc.pubCh.ID, ids[3], ids[1]), tc.sMember, nil)
+	if code != 200 {
+		t.Fatalf("expected 200, got %d. Resp: %s", code, resp)
+	}
+	var lr2 listResp
+	if err := json.Unmarshal([]byte(resp), &lr2); err != nil {
+		t.Fatal(err)
+	}
+	found = false
+	for _, m := range lr2.Data {
+		if m.ID == ids[3] {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected around to take precedence over before, but anchor message was not in the result")
+	}
+
+	// A non-member of a private channel gets 404, not 403, when using around.
+	code, resp = tc.request("GET", fmt.Sprintf("/api/v1/channels/%d/messages?around=%s", tc.privCh.ID, ids[3]), tc.sNonMember, nil)
+	if code != 404 {
+		t.Fatalf("expected 404 for non-member around request, got %d. Resp: %s", code, resp)
+	}
+
+	// An empty channel with around returns 200 and an empty array, not an error.
+	emptyCh, err := tc.s.CreateChannel(tc.ctx, "public", "around-empty", "Around Empty", "", tc.uMember.ID, []int64{tc.uMember.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, resp = tc.request("GET", fmt.Sprintf("/api/v1/channels/%d/messages?around=%s", emptyCh.ID, ids[3]), tc.sMember, nil)
+	if code != 200 {
+		t.Fatalf("expected 200 for empty channel, got %d. Resp: %s", code, resp)
+	}
+	var lr3 listResp
+	if err := json.Unmarshal([]byte(resp), &lr3); err != nil {
+		t.Fatal(err)
+	}
+	if len(lr3.Data) != 0 {
+		t.Errorf("expected empty data for empty channel, got %d messages", len(lr3.Data))
+	}
+}
+
 func TestMessageAPIRateLimit(t *testing.T) {
 	tc := setupTestContext(t)
 	defer tc.close()

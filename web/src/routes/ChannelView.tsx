@@ -1,14 +1,31 @@
 import { useParams } from 'react-router-dom'
-import { MessageList } from '../components/MessageList'
+import { useEffect, useRef } from 'react'
+import { MessageList, type MessageListHandle } from '../components/MessageList'
 import { Composer } from '../components/Composer'
+import { PulseRuler } from '../components/PulseRuler'
 import { TypingIndicator } from '../components/TypingIndicator'
 import { useAuth } from '../hooks/useAuth'
 import { useChannelBySlug, useDmByUsername } from '../hooks/useResolvedChannel'
+import { useUiStore } from '../store/ui'
+
+/** Consumes a cross-route pendingJump handoff (from a search result) once its target
+ * channel is mounted. */
+function usePendingJump(channelId: string, listRef: React.RefObject<MessageListHandle | null>) {
+  const pendingJump = useUiStore((s) => s.pendingJump)
+  const clearPendingJump = useUiStore((s) => s.clearPendingJump)
+  useEffect(() => {
+    if (!pendingJump || pendingJump.channelId !== channelId) return
+    void listRef.current?.scrollToMessage(pendingJump.messageId, { fetchIfMissing: true, highlight: true })
+    clearPendingJump()
+  }, [pendingJump, channelId, listRef, clearPendingJump])
+}
 
 export function ChannelView() {
   const { slug } = useParams()
   const { data: auth } = useAuth()
   const channel = useChannelBySlug(slug)
+  const listRef = useRef<MessageListHandle>(null)
+  usePendingJump(channel.id, listRef)
 
   return (
     <div className="flex h-full flex-col">
@@ -21,7 +38,12 @@ export function ChannelView() {
         </div>
       ) : (
         <>
+          <PulseRuler
+            channelId={channel.id}
+            onJump={(messageId) => listRef.current?.scrollToMessage(messageId, { fetchIfMissing: true })}
+          />
           <MessageList
+            ref={listRef}
             channelId={channel.id}
             lastReadMessageId={channel.lastReadMessageId}
             currentUsername={auth?.user.username}
@@ -38,6 +60,8 @@ export function DmView() {
   const { username } = useParams()
   const { data: auth } = useAuth()
   const dm = useDmByUsername(username)
+  const listRef = useRef<MessageListHandle>(null)
+  usePendingJump(dm.id, listRef)
 
   return (
     <div className="flex h-full flex-col">
@@ -50,7 +74,12 @@ export function DmView() {
         </div>
       ) : (
         <>
+          <PulseRuler
+            channelId={dm.id}
+            onJump={(messageId) => listRef.current?.scrollToMessage(messageId, { fetchIfMissing: true })}
+          />
           <MessageList
+            ref={listRef}
             channelId={dm.id}
             lastReadMessageId={dm.lastReadMessageId}
             currentUsername={auth?.user.username}

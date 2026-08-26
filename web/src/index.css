@@ -48,3 +48,12 @@ html, body, #root {
 body {
   @apply bg-paper text-ink font-body;
 }
+
+/* Accessibility floor: every interactive element gets a visible focus ring by default.
+   Elements that supply their own focus-visible treatment (e.g. focus:border-teal on
+   form inputs) still get this ring unless they explicitly opt out with outline-none
+   paired with their own ring class. */
+:focus-visible {
+  outline: 2px solid #0E6E60; /* teal, tailwind.config.ts */
+  outline-offset: 2px;
+}

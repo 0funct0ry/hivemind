@@ -302,6 +302,18 @@ func messageList(s *store.Store) gin.HandlerFunc {
 			after = &parsed
 		}
 
+		// around takes precedence over before/after when both are supplied — it
+		// fetches a symmetric window centered on the anchor id rather than paging.
+		var around *int64
+		if val := c.Query("around"); val != "" {
+			parsed, err := strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				httpx.Fail(c, 400, "invalid_cursor", "Invalid around cursor.")
+				return
+			}
+			around = &parsed
+		}
+
 		limit := 50
 		if val := c.Query("limit"); val != "" {
 			parsed, err := strconv.Atoi(val)
@@ -316,8 +328,30 @@ func messageList(s *store.Store) gin.HandlerFunc {
 			limit = 200
 		}
 
+		if around != nil {
+			msgs, err := s.ListChannelMessages(c.Request.Context(), ch.ID, nil, nil, around, limit)
+			if err != nil {
+				httpx.Fail(c, 500, "internal_error", "Could not fetch messages.")
+				return
+			}
+			data := make([]gin.H, 0, len(msgs))
+			for _, m := range msgs {
+				data = append(data, publicMessage(m))
+			}
+			var nextBefore string
+			if len(msgs) > 0 {
+				nextBefore = strconv.FormatInt(msgs[0].ID, 10)
+			}
+			c.JSON(200, gin.H{
+				"data":        data,
+				"has_more":    false,
+				"next_before": nextBefore,
+			})
+			return
+		}
+
 		// Fetch limit + 1 to verify has_more
-		msgs, err := s.ListChannelMessages(c.Request.Context(), ch.ID, before, after, limit+1)
+		msgs, err := s.ListChannelMessages(c.Request.Context(), ch.ID, before, after, nil, limit+1)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not fetch messages.")
 			return

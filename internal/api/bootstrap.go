@@ -50,7 +50,7 @@ func (b *bootstrap) consume(token string) bool {
 }
 func (b *bootstrap) gate(s *store.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		n, err := s.CountUsers(c)
+		n, err := s.CountUsers(c.Request.Context())
 		if err != nil {
 			c.AbortWithStatusJSON(500, gin.H{"error": gin.H{"code": "internal_error", "message": "Could not inspect workspace state."}})
 			return
@@ -91,7 +91,7 @@ func setupCreate(s *store.Store, a *auth.Service, b *bootstrap) gin.HandlerFunc 
 			c.JSON(409, gin.H{"error": gin.H{"code": "setup_already_complete", "message": "Setup has already been completed."}})
 			return
 		}
-		u, err := s.CreateUser(c, store.UserInput{Username: in.Username, Email: in.Email, PasswordHash: hash, Role: "admin"})
+		u, err := s.CreateUser(c.Request.Context(), store.UserInput{Username: in.Username, Email: in.Email, PasswordHash: hash, Role: "admin"})
 		if err != nil {
 			c.JSON(400, gin.H{"error": gin.H{"code": "invalid_user", "message": err.Error()}})
 			return

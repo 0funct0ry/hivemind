@@ -121,7 +121,7 @@ func TestMessageStoreCRUD(t *testing.T) {
 	}
 
 	// List messages (no cursors) - should return all messages in ASC order (by list reversal)
-	list, err := s.ListChannelMessages(ctx, ch.ID, nil, nil, 10)
+	list, err := s.ListChannelMessages(ctx, ch.ID, nil, nil, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestMessageStoreCRUD(t *testing.T) {
 	// List with `before` cursor
 	// Let's get messages before the last created message (msgs[4].ID)
 	beforeCursor := msgs[4].ID
-	listBefore, err := s.ListChannelMessages(ctx, ch.ID, &beforeCursor, nil, 3)
+	listBefore, err := s.ListChannelMessages(ctx, ch.ID, &beforeCursor, nil, nil, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestMessageStoreCRUD(t *testing.T) {
 
 	// List with `after` cursor
 	afterCursor := msgs[1].ID
-	listAfter, err := s.ListChannelMessages(ctx, ch.ID, nil, &afterCursor, 2)
+	listAfter, err := s.ListChannelMessages(ctx, ch.ID, nil, &afterCursor, nil, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +162,101 @@ func TestMessageStoreCRUD(t *testing.T) {
 	}
 	if listAfter[0].ID != msgs[2].ID || listAfter[1].ID != msgs[3].ID {
 		t.Errorf("expected msgs[2] and msgs[3], got IDs %d and %d", listAfter[0].ID, listAfter[1].ID)
+	}
+}
+
+func TestListChannelMessagesAround(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	u1, err := s.CreateUser(ctx, UserInput{Username: "alice", Email: "alice@example.com", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch1, err := s.CreateChannel(ctx, "public", "around-test", "Around Test", "", u1.ID, []int64{u1.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chEmpty, err := s.CreateChannel(ctx, "public", "around-test-empty", "Around Test Empty", "", u1.ID, []int64{u1.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var msgs []Message
+	for i := 0; i < 9; i++ {
+		m, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch1.ID, UserID: u1.ID, Body: "m"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs = append(msgs, m)
+	}
+
+	// Soft-deleted messages stay visible with a blanked body (per SPEC soft-delete
+	// semantics) rather than being excluded from listings — assert they still surface.
+	if _, err := s.writer.ExecContext(ctx, `UPDATE messages SET deleted_at = 1, body = '' WHERE id = ?`, msgs[8].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		channel int64
+		around  int64
+		limit   int
+		wantIDs []int64 // expected ascending order
+	}{
+		{
+			// half = limit/2 = 3; older query fetches half+1 (incl. anchor), newer fetches half.
+			name:    "middle anchor",
+			channel: ch1.ID,
+			around:  msgs[4].ID,
+			limit:   6,
+			wantIDs: []int64{msgs[1].ID, msgs[2].ID, msgs[3].ID, msgs[4].ID, msgs[5].ID, msgs[6].ID, msgs[7].ID},
+		},
+		{
+			name:    "first message anchor: no older half",
+			channel: ch1.ID,
+			around:  msgs[0].ID,
+			limit:   4,
+			wantIDs: []int64{msgs[0].ID, msgs[1].ID, msgs[2].ID},
+		},
+		{
+			name:    "last message anchor includes trailing soft-deleted message",
+			channel: ch1.ID,
+			around:  msgs[7].ID,
+			limit:   4,
+			wantIDs: []int64{msgs[5].ID, msgs[6].ID, msgs[7].ID, msgs[8].ID},
+		},
+		{
+			name:    "empty channel yields empty result regardless of anchor",
+			channel: chEmpty.ID,
+			around:  msgs[4].ID,
+			limit:   10,
+			wantIDs: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := s.ListChannelMessages(ctx, tt.channel, nil, nil, &tt.around, tt.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tt.wantIDs) {
+				t.Fatalf("expected %d messages, got %d", len(tt.wantIDs), len(got))
+			}
+			for i, id := range tt.wantIDs {
+				if got[i].ID != id {
+					t.Errorf("index %d: expected message ID %d, got %d", i, id, got[i].ID)
+				}
+			}
+		})
 	}
 }
 
@@ -342,7 +437,7 @@ func TestThreads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	channelMsgs, err := s.ListChannelMessages(ctx, ch1.ID, nil, nil, 10)
+	channelMsgs, err := s.ListChannelMessages(ctx, ch1.ID, nil, nil, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

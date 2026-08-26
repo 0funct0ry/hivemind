@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e:seed": "bash e2e/setup-fixture.sh",
+    "e2e": "npm run e2e:seed && playwright test"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.102.3",
@@ -17,6 +19,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",

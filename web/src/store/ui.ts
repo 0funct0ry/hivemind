@@ -17,6 +17,12 @@ interface UiState {
   unreadAnchors: Record<string, string | null>
   /** channelId -> userId -> typing state, pruned by expiry. */
   typing: Record<string, Record<string, TypingUser>>
+  commandPaletteOpen: boolean
+  searchOverlayOpen: boolean
+  shortcutsHelpOpen: boolean
+  /** A cross-route "scroll to this message once its channel mounts" handoff, consumed by
+   * ChannelView/DmView after navigating there from a search result. */
+  pendingJump: { channelId: string; messageId: string } | null
 
   openThread: (messageId: string) => void
   closeThread: () => void
@@ -26,6 +32,14 @@ interface UiState {
   setUnreadAnchor: (channelId: string, lastReadMessageId: string | null) => void
   setTyping: (channelId: string, user: TypingUser) => void
   pruneTyping: (channelId: string, now: number) => void
+  openCommandPalette: () => void
+  closeCommandPalette: () => void
+  openSearchOverlay: () => void
+  closeSearchOverlay: () => void
+  openShortcutsHelp: () => void
+  closeShortcutsHelp: () => void
+  setPendingJump: (jump: { channelId: string; messageId: string }) => void
+  clearPendingJump: () => void
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -36,6 +50,10 @@ export const useUiStore = create<UiState>((set) => ({
   connectionState: 'closed',
   unreadAnchors: {},
   typing: {},
+  commandPaletteOpen: false,
+  searchOverlayOpen: false,
+  shortcutsHelpOpen: false,
+  pendingJump: null,
 
   openThread: (messageId) => set({ openThreadId: messageId, threadPanelOpen: true }),
   closeThread: () => set({ openThreadId: null, threadPanelOpen: false }),
@@ -66,4 +84,15 @@ export const useUiStore = create<UiState>((set) => ({
       }
       return { typing: { ...s.typing, [channelId]: next } }
     }),
+  openCommandPalette: () =>
+    set({ commandPaletteOpen: true, searchOverlayOpen: false, shortcutsHelpOpen: false }),
+  closeCommandPalette: () => set({ commandPaletteOpen: false }),
+  openSearchOverlay: () =>
+    set({ searchOverlayOpen: true, commandPaletteOpen: false, shortcutsHelpOpen: false }),
+  closeSearchOverlay: () => set({ searchOverlayOpen: false }),
+  openShortcutsHelp: () =>
+    set({ shortcutsHelpOpen: true, commandPaletteOpen: false, searchOverlayOpen: false }),
+  closeShortcutsHelp: () => set({ shortcutsHelpOpen: false }),
+  setPendingJump: (jump) => set({ pendingJump: jump }),
+  clearPendingJump: () => set({ pendingJump: null }),
 }))

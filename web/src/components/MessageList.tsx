@@ -1,8 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Attachment, Message } from '../lib/api'
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { api, type Attachment, type Message } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
 import { useMessages } from '../hooks/useMessages'
 import { useUiStore } from '../store/ui'
+import { prefersReducedMotion } from '../lib/throttle'
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000
 
@@ -95,7 +97,13 @@ function MessageRow({
 }) {
   const name = message.user?.display_name || message.user?.username || 'Unknown'
   return (
-    <div className={'group grid grid-cols-[34px_minmax(0,1fr)] gap-2 px-4 ' + (grouped ? 'py-0.5' : 'py-1.5')}>
+    <div
+      data-message-id={message.id}
+      className={
+        'group grid grid-cols-[34px_minmax(0,1fr)] gap-2 px-4 transition-colors duration-1000 ' +
+        (grouped ? 'py-0.5 ' : 'py-1.5 ')
+      }
+    >
       <div className="flex items-start justify-center pt-1">
         {grouped ? (
           <time className="text-[10px] text-ink-3 opacity-0 group-hover:opacity-100">
@@ -136,19 +144,21 @@ function MessageRow({
   )
 }
 
-export function MessageList({
-  channelId,
-  lastReadMessageId,
-  currentUsername,
-}: {
-  channelId: string
-  lastReadMessageId: string | null
-  currentUsername?: string
-}) {
+export interface MessageListHandle {
+  /** Scrolls the given message into view, optionally fetching a page around it first,
+   * and optionally applying a transient highlight flash. */
+  scrollToMessage: (messageId: string, opts?: { fetchIfMissing?: boolean; highlight?: boolean }) => Promise<void>
+}
+
+export const MessageList = forwardRef<
+  MessageListHandle,
+  { channelId: string; lastReadMessageId: string | null; currentUsername?: string }
+>(function MessageList({ channelId, lastReadMessageId, currentUsername }, ref) {
   const { messages, fetchNextPage, hasNextPage, isFetchingNextPage } = useMessages(channelId)
   const openThread = useUiStore((s) => s.openThread)
   const setUnreadAnchor = useUiStore((s) => s.setUnreadAnchor)
   const unreadAnchor = useUiStore((s) => s.unreadAnchors[channelId])
+  const queryClient = useQueryClient()
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -194,6 +204,40 @@ export function MessageList({
     if (!scroller) return
     isNearBottomRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
   }
+
+  const findRow = (messageId: string) =>
+    scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`) ?? null
+
+  const scrollAndHighlight = (el: HTMLElement, highlight: boolean) => {
+    el.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+    if (!highlight) return
+    el.classList.add('bg-pollen-soft')
+    window.setTimeout(() => el.classList.remove('bg-pollen-soft'), 1200)
+  }
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToMessage: async (messageId, opts = {}) => {
+        const existing = findRow(messageId)
+        if (existing) {
+          scrollAndHighlight(existing, opts.highlight ?? false)
+          return
+        }
+        if (!opts.fetchIfMissing) return
+        const fetched = await api.listMessages(channelId, { around: messageId, limit: 50 })
+        queryClient.setQueryData(['messages', channelId], {
+          pages: [{ data: fetched.data, has_more: fetched.has_more, next_before: fetched.next_before }],
+          pageParams: [undefined],
+        })
+        // Wait for the new page to render before measuring/scrolling.
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+        const el = findRow(messageId)
+        if (el) scrollAndHighlight(el, opts.highlight ?? false)
+      },
+    }),
+    [channelId, queryClient],
+  )
 
   if (messages.length === 0) {
     return (
@@ -259,4 +303,4 @@ export function MessageList({
       <div ref={bottomRef} />
     </div>
   )
-}
+})

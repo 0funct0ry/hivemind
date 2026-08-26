@@ -169,10 +169,10 @@ func RequireAuth(a *auth.Service, cfg config.Config) gin.HandlerFunc {
 				httpx.Fail(c, 401, "unauthenticated", "Authentication required.")
 				return
 			}
-			u, err = a.AuthenticateToken(c, parts[1])
+			u, err = a.AuthenticateToken(c.Request.Context(), parts[1])
 			kind = "bearer"
 		} else if x, ok := c.Cookie("hm_session"); ok == nil && x != "" {
-			u, _, err = a.AuthenticateSession(c, x)
+			u, _, err = a.AuthenticateSession(c.Request.Context(), x)
 			sid = x
 			kind = "cookie"
 		} else {
@@ -251,7 +251,7 @@ func login(s *store.Store, a *auth.Service, cfg config.Config, l *limiter) gin.H
 			httpx.Fail(c, 429, "rate_limited", "Too many login failures.")
 			return
 		}
-		u, err := s.GetUserByLogin(c, in.Login)
+		u, err := s.GetUserByLogin(c.Request.Context(), in.Login)
 		valid := false
 		if err == nil {
 			valid = auth.CheckPassword(u.PasswordHash, in.Password)
@@ -264,7 +264,7 @@ func login(s *store.Store, a *auth.Service, cfg config.Config, l *limiter) gin.H
 			return
 		}
 		l.success(strings.ToLower(in.Login))
-		sid, err := a.CreateSession(c, u.ID, c.GetHeader("User-Agent"), ip)
+		sid, err := a.CreateSession(c.Request.Context(), u.ID, c.GetHeader("User-Agent"), ip)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not create session.")
 			return
@@ -277,7 +277,7 @@ func login(s *store.Store, a *auth.Service, cfg config.Config, l *limiter) gin.H
 func dummyHashForTiming() string { return auth.DummyHash() }
 func logout(a *auth.Service, cfg config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := a.Store.DeleteSession(c, c.GetString("session_id")); err != nil {
+		if err := a.Store.DeleteSession(c.Request.Context(), c.GetString("session_id")); err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not log out.")
 			return
 		}
@@ -302,7 +302,7 @@ func password(a *auth.Service, cfg config.Config) gin.HandlerFunc {
 			httpx.Fail(c, 400, "invalid_request", "Current and new passwords are required.")
 			return
 		}
-		if err := a.ChangePassword(c, u, in.Current, in.New); err != nil {
+		if err := a.ChangePassword(c.Request.Context(), u, in.Current, in.New); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				httpx.Fail(c, 401, "invalid_password", "Current password is incorrect.")
 			} else {
@@ -317,7 +317,7 @@ func password(a *auth.Service, cfg config.Config) gin.HandlerFunc {
 func tokenList(s *store.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u, _ := CurrentUser(c)
-		v, err := s.ListAPITokens(c, u.ID)
+		v, err := s.ListAPITokens(c.Request.Context(), u.ID)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not list tokens.")
 			return
@@ -360,7 +360,7 @@ func tokenCreate(a *auth.Service) gin.HandlerFunc {
 				return
 			}
 		}
-		id, plain, err := a.CreateToken(c, u.ID, in.Name, d)
+		id, plain, err := a.CreateToken(c.Request.Context(), u.ID, in.Name, d)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not create token.")
 			return
@@ -376,7 +376,7 @@ func tokenDelete(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 404, "not_found", "Token not found.")
 			return
 		}
-		if err := s.DeleteAPIToken(c, u.ID, id); err != nil {
+		if err := s.DeleteAPIToken(c.Request.Context(), u.ID, id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				httpx.Fail(c, 404, "not_found", "Token not found.")
 				return
