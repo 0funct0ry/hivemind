@@ -50,6 +50,24 @@ func resolveChannel(c *gin.Context, s *store.Store, meID int64) (store.Channel, 
 	return ch, access, true
 }
 
+func publicChannelDetails(ch store.ChannelDetails) gin.H {
+	res := gin.H{
+		"id":                   strconv.FormatInt(ch.ID, 10),
+		"kind":                 ch.Kind,
+		"slug":                 ch.Slug,
+		"name":                 ch.Name,
+		"topic":                ch.Topic,
+		"member_count":         ch.MemberCount,
+		"last_message_id":      nil,
+		"last_read_message_id": strconv.FormatInt(ch.LastReadMessageID, 10),
+		"joined":               ch.Joined,
+	}
+	if ch.LastMessageID != nil {
+		res["last_message_id"] = strconv.FormatInt(*ch.LastMessageID, 10)
+	}
+	return res
+}
+
 func channelList(s *store.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		me, _ := CurrentUser(c)
@@ -58,7 +76,11 @@ func channelList(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 500, "internal_error", "Could not list channels.")
 			return
 		}
-		c.JSON(200, gin.H{"data": list})
+		data := make([]gin.H, 0, len(list))
+		for _, ch := range list {
+			data = append(data, publicChannelDetails(ch))
+		}
+		c.JSON(200, gin.H{"data": data})
 	}
 }
 

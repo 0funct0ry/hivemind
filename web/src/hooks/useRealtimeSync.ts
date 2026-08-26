@@ -3,6 +3,21 @@ import { useEffect } from 'react'
 import { wsClient } from '../lib/ws'
 import { useUiStore } from '../store/ui'
 
+interface MessageCreatedPayload {
+  channel_id: string
+}
+
+interface ThreadReplyPayload {
+  channel_id: string
+  root_id: string
+}
+
+interface TypingPayload {
+  channel_id: string
+  user_id: string
+  expires_at: number
+}
+
 /**
  * Connects the WebSocket client for the lifetime of the app shell and wires
  * server events onto TanStack Query cache invalidation. Messages themselves
@@ -12,20 +27,36 @@ import { useUiStore } from '../store/ui'
 export function useRealtimeSync() {
   const queryClient = useQueryClient()
   const setConnectionState = useUiStore((s) => s.setConnectionState)
+  const setTyping = useUiStore((s) => s.setTyping)
 
   useEffect(() => {
     const offState = wsClient.onStateChange(setConnectionState)
     const invalidate = (keys: string[]) => () => {
       for (const key of keys) queryClient.invalidateQueries({ queryKey: [key] })
     }
-    const offMessage = wsClient.on('message.created', invalidate(['channels', 'unreads']))
-    const offThread = wsClient.on('thread.reply', invalidate(['channels', 'unreads']))
+    const offMessage = wsClient.on('message.created', (payload) => {
+      const p = payload as MessageCreatedPayload
+      queryClient.invalidateQueries({ queryKey: ['messages', p.channel_id] })
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      queryClient.invalidateQueries({ queryKey: ['unreads'] })
+    })
+    const offThread = wsClient.on('thread.reply', (payload) => {
+      const p = payload as ThreadReplyPayload
+      queryClient.invalidateQueries({ queryKey: ['thread', p.root_id] })
+      queryClient.invalidateQueries({ queryKey: ['messages', p.channel_id] })
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      queryClient.invalidateQueries({ queryKey: ['unreads'] })
+    })
     const offRead = wsClient.on('read.updated', invalidate(['unreads']))
     const offChannel = wsClient.on('channel.created', invalidate(['channels']))
     const offChannelUpdated = wsClient.on('channel.updated', invalidate(['channels']))
     const offMember = wsClient.on('member.joined', invalidate(['channels']))
     const offMemberLeft = wsClient.on('member.left', invalidate(['channels']))
     const offMention = wsClient.on('mention.created', invalidate(['unreads']))
+    const offTyping = wsClient.on('typing', (payload) => {
+      const p = payload as TypingPayload
+      setTyping(p.channel_id, { userId: p.user_id, name: p.user_id, expiresAt: p.expires_at })
+    })
 
     wsClient.connect()
 
@@ -39,7 +70,8 @@ export function useRealtimeSync() {
       offMember()
       offMemberLeft()
       offMention()
+      offTyping()
       wsClient.close()
     }
-  }, [queryClient, setConnectionState])
+  }, [queryClient, setConnectionState, setTyping])
 }

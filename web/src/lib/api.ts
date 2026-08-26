@@ -49,6 +49,57 @@ export interface UnreadEntry {
   joined: boolean
 }
 
+export interface MessageUser {
+  id: string
+  username: string
+  display_name: string
+  avatar_color: string
+  is_bot: boolean
+}
+
+export interface Attachment {
+  id: string
+  name: string
+  mime: string
+  size: number
+  url: string
+  width?: number
+  height?: number
+}
+
+export interface Message {
+  id: string
+  channel_id: string
+  user_id: string
+  user: MessageUser | null
+  body: string
+  thread_id: string | null
+  reply_count: number
+  last_reply_id: string | null
+  has_attachments: boolean
+  broadcast: boolean
+  attachments: Attachment[]
+  edited_at: number | null
+  deleted_at: number | null
+  created_at: number
+  client_msg_id: string | null
+  mentions: unknown[]
+  /** Client-only: present while an optimistic send is in flight or has failed. */
+  status?: 'sending' | 'failed'
+}
+
+export interface UploadedFile {
+  id: string
+  sha256: string
+  name: string
+  mime: string
+  size: number
+  uploaded_by: string
+  created_at: number
+  width?: number
+  height?: number
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     credentials: 'include',
@@ -91,4 +142,65 @@ export const api = {
   listChannels: () => request<{ data: Channel[] }>('/channels'),
   listDMs: () => request<{ data: DM[] }>('/dms'),
   unreadSummary: () => request<{ data: UnreadEntry[] }>('/unreads'),
+  getUser: (id: string) => request<{ user: User }>(`/users/${id}`),
+  listUsers: (params: { q?: string; channelId?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.q) qs.set('q', params.q)
+    if (params.channelId) qs.set('channel_id', params.channelId)
+    if (params.limit) qs.set('limit', String(params.limit))
+    return request<{ data: User[] }>(`/users?${qs.toString()}`)
+  },
+  createDM: (userId: string) =>
+    request<{ channel: DM }>('/dms', { method: 'POST', body: JSON.stringify({ user_id: userId }) }),
+
+  listMessages: (channelId: string, params: { before?: string; after?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.before) qs.set('before', params.before)
+    if (params.after) qs.set('after', params.after)
+    if (params.limit) qs.set('limit', String(params.limit))
+    return request<{ data: Message[]; has_more: boolean; next_before: string }>(
+      `/channels/${channelId}/messages?${qs.toString()}`,
+    )
+  },
+  createMessage: (
+    channelId: string,
+    body: { body: string; thread_id?: string; client_msg_id?: string; file_ids?: string[]; also_send_to_channel?: boolean },
+  ) => request<{ message: Message }>(`/channels/${channelId}/messages`, { method: 'POST', body: JSON.stringify(body) }),
+  getMessage: (id: string) => request<{ message: Message }>(`/messages/${id}`),
+  listReplies: (rootId: string, params: { after?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.after) qs.set('after', params.after)
+    if (params.limit) qs.set('limit', String(params.limit))
+    return request<{ root: Message; data: Message[]; has_more: boolean }>(`/messages/${rootId}/replies?${qs.toString()}`)
+  },
+  markRead: (channelId: string, messageId: string) =>
+    request<void>(`/channels/${channelId}/read`, { method: 'POST', body: JSON.stringify({ message_id: messageId }) }),
+
+  uploadFile: (file: File, onProgress?: (pct: number) => void): Promise<UploadedFile> =>
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', '/api/v1/uploads')
+      xhr.withCredentials = true
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable && onProgress) onProgress((evt.loaded / evt.total) * 100)
+      }
+      xhr.onload = () => {
+        let body: unknown = null
+        try {
+          body = JSON.parse(xhr.responseText)
+        } catch {
+          // ignore
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(body as UploadedFile)
+        } else {
+          const err = body as { error?: { code?: string; message?: string; field?: unknown } } | null
+          reject(new ApiError(err?.error?.code ?? 'unknown_error', err?.error?.message ?? 'Upload failed.', err?.error?.field ?? null))
+        }
+      }
+      xhr.onerror = () => reject(new ApiError('network_error', 'Upload failed.'))
+      const form = new FormData()
+      form.append('file', file)
+      xhr.send(form)
+    }),
 }
