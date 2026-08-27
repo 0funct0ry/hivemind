@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useUiStore } from '../store/ui'
 import { wsClient, type ConnectionState } from '../lib/ws'
+import { Avatar } from './Avatar'
 
 function UnreadIndicator({ count, mentioned }: { count: number; mentioned: boolean }) {
   if (count === 0) return null
@@ -96,7 +97,7 @@ export function Sidebar() {
         <kbd className="ml-auto rounded border border-rule px-1 font-mono text-[9px] text-ink-3">⌘K</kbd>
       </button>
 
-      <div className="mb-1 flex items-center gap-1 px-1 font-mono text-[11px] uppercase tracking-wide text-ink-3">
+      <div className="lbl mb-1 flex items-center gap-1 px-1">
         <span>Channels</span>
         <button
           type="button"
@@ -136,7 +137,7 @@ export function Sidebar() {
         })}
       </ul>
 
-      <div className="mb-1 flex items-center gap-1 px-1 font-mono text-[11px] uppercase tracking-wide text-ink-3">
+      <div className="lbl mb-1 flex items-center gap-1 px-1">
         <span>Direct messages</span>
         <button
           type="button"
@@ -181,11 +182,7 @@ export function Sidebar() {
 
       {auth?.user && (
         <div className="mt-auto flex items-center gap-2 border-t border-rule px-1 pt-3">
-          <span
-            className="h-[26px] w-[26px] shrink-0 rounded-full"
-            style={{ backgroundColor: auth.user.avatar_color }}
-            aria-hidden
-          />
+          <Avatar name={auth.user.display_name || auth.user.username} color={auth.user.avatar_color} size={26} />
           <div className="min-w-0">
             <div className="truncate text-[13.5px] font-semibold text-ink">
               {auth.user.display_name || auth.user.username}

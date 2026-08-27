@@ -3,15 +3,16 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type ActivityResponse } from '../lib/api'
 import { rafThrottle, prefersReducedMotion } from '../lib/throttle'
 
-const HEIGHT = 28
+const HEIGHT = 34
 const GAP = 1.6
 const BUCKETS = 48
+const HOT_THRESHOLD = 0.62
 
 // SVG presentation attributes can't use Tailwind utility classes, and the design tokens
 // aren't exposed as CSS custom properties, so these mirror tailwind.config.ts directly.
 const COLOR_TEAL = '#0E6E60'
 const COLOR_TEAL_SOFT = '#DCEBE6'
-const COLOR_POLLEN = '#D4930B'
+const COLOR_POLLEN = '#C9860A'
 
 function formatBucketLabel(startMs: number, count: number): string {
   const time = new Date(startMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
@@ -33,7 +34,7 @@ export function PulseRuler({ channelId, onJump }: { channelId: string; onJump: (
   const draggingRef = useRef(false)
 
   if (!data) {
-    return <div className="h-[28px] border-b border-rule bg-paper" aria-hidden />
+    return <div className="h-[34px] border-b border-rule bg-paper" aria-hidden />
   }
 
   const n = data.counts.length
@@ -114,9 +115,12 @@ export function PulseRuler({ channelId, onJump }: { channelId: string; onJump: (
 
   if (isEmpty) {
     return (
-      <div className="relative flex h-[28px] items-center justify-center border-b border-rule bg-paper">
-        <div className="absolute inset-x-4 top-1/2 h-px bg-rule" />
-        <span className="relative z-10 bg-paper px-2 font-mono text-[10px] text-ink-3">No messages yet</span>
+      <div className="border-b border-rule bg-paper px-2 py-1">
+        <div className="lbl px-1 pb-1">Pulse · last 24h</div>
+        <div className="relative flex h-[34px] items-center justify-center">
+          <div className="absolute inset-x-4 top-1/2 h-px bg-rule" />
+          <span className="relative z-10 bg-paper px-2 font-mono text-[10px] text-ink-3">No messages yet</span>
+        </div>
       </div>
     )
   }
@@ -125,8 +129,27 @@ export function PulseRuler({ channelId, onJump }: { channelId: string; onJump: (
   const bw = (w - (n - 1) * GAP) / n
   const reduced = prefersReducedMotion()
 
+  const totalMessages = data.counts.reduce((a, b) => a + b, 0)
+  const totalMentions = data.mentions.length
+  const summary =
+    hovered !== null
+      ? formatBucketLabel(data.from + hovered * data.bucket_ms, data.counts[hovered] ?? 0)
+      : `${totalMessages} message${totalMessages === 1 ? '' : 's'}${
+          totalMentions > 0 ? ` · ${totalMentions} mention${totalMentions === 1 ? '' : 's'}` : ''
+        }`
+
+  const timeLabels = Array.from({ length: 5 }, (_, i) => {
+    const frac = i / 4
+    const t = data.from + frac * (n * data.bucket_ms)
+    return new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+  })
+
   return (
     <div className="border-b border-rule bg-paper px-2 py-1">
+      <div className="flex items-baseline justify-between px-1 pb-1">
+        <span className="lbl">Pulse · last 24h</span>
+        <span className="font-mono text-[9.5px] text-ink-3">{summary}</span>
+      </div>
       <div className="relative">
         <svg
           ref={svgRef}
@@ -138,7 +161,7 @@ export function PulseRuler({ channelId, onJump }: { channelId: string; onJump: (
           aria-valuenow={focused}
           viewBox={`0 0 ${w} ${HEIGHT}`}
           preserveAspectRatio="none"
-          className="block h-[28px] w-full cursor-crosshair outline-none focus-visible:ring-2 focus-visible:ring-teal"
+          className="block h-[34px] w-full cursor-crosshair outline-none focus-visible:ring-2 focus-visible:ring-teal"
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           onMouseDown={handleMouseDown}
@@ -148,6 +171,7 @@ export function PulseRuler({ channelId, onJump }: { channelId: string; onJump: (
           {data.counts.map((v, i) => {
             const h = v === 0 ? 0 : Math.max(2, (v / max) * (HEIGHT - 9))
             const active = hovered === i || focused === i
+            const hot = !active && max > 0 && v / max > HOT_THRESHOLD
             return (
               <rect
                 key={i}
@@ -155,7 +179,8 @@ export function PulseRuler({ channelId, onJump }: { channelId: string; onJump: (
                 y={HEIGHT - h}
                 width={bw}
                 height={h}
-                fill={active ? COLOR_TEAL : COLOR_TEAL_SOFT}
+                fill={active ? COLOR_TEAL : hot ? COLOR_TEAL : COLOR_TEAL_SOFT}
+                opacity={active ? 1 : hot ? 0.95 : 0.42}
                 className={reduced ? '' : 'transition-colors duration-150'}
               />
             )
@@ -189,6 +214,11 @@ export function PulseRuler({ channelId, onJump }: { channelId: string; onJump: (
             {formatBucketLabel(data.from + hovered * data.bucket_ms, data.counts[hovered] ?? 0)}
           </div>
         )}
+      </div>
+      <div className="mt-[-1px] flex justify-between font-mono text-[8.5px] text-ink-3">
+        {timeLabels.map((label, i) => (
+          <span key={i}>{label}</span>
+        ))}
       </div>
       <div aria-live="polite" className="sr-only">
         {announce}

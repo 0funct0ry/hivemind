@@ -47,6 +47,8 @@ html, body, #root {
 
 body {
   @apply bg-paper text-ink font-body;
+  font-size: 14.5px;
+  line-height: 1.55;
 }
 
 /* Accessibility floor: every interactive element gets a visible focus ring by default.
@@ -56,4 +58,78 @@ body {
 :focus-visible {
   outline: 2px solid #0E6E60; /* teal, tailwind.config.ts */
   outline-offset: 2px;
+}
+
+/* Text fields match the mockup exactly: no visible border/outline on focus (see
+   internal-docs/MOCKUP.html's textarea:focus/.pinput input:focus rules, both `outline:none`
+   with no compensating border-color or box-shadow). Higher specificity than the bare
+   :focus-visible rule above so it wins regardless of cascade-layer ordering. */
+textarea:focus-visible,
+input:not([type]):focus-visible,
+input[type="text"]:focus-visible {
+  outline: none;
+}
+
+@layer components {
+  .lbl {
+    font-family: theme('fontFamily.mono');
+    font-size: 9.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: theme('colors.ink-3');
+    font-weight: 500;
+  }
+}
+
+.stream {
+  scroll-behavior: smooth;
+}
+
+@keyframes flash {
+  from {
+    background-color: theme('colors.pollen-soft');
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.flash-highlight {
+  animation: flash 1.4s ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+.modal-rise {
+  animation: rise .16s ease-out;
+}
+
+@keyframes bob {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: .4;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+.typing-dot {
+  animation: bob 1.1s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .stream {
+    scroll-behavior: auto;
+  }
 }

@@ -7,6 +7,7 @@ import { formatTime } from '../lib/time'
 import { shouldGroup } from '../lib/messageGrouping'
 import { api, type Channel, type DM } from '../lib/api'
 import { Composer } from './Composer'
+import { Avatar } from './Avatar'
 
 /** Resolves a channel/DM id to a human "#slug" or "@username" label from the cached
  * channels/DMs lists, for the thread panel's header subtitle. */
@@ -63,20 +64,26 @@ export function ThreadPanel({ currentUsername }: { currentUsername?: string }) {
           <>
             <div className="border-b border-rule px-4 py-3">
               <div className="flex items-baseline gap-2">
-                <span
-                  className="h-6 w-6 rounded-full"
-                  style={{ backgroundColor: data.root.user?.avatar_color ?? '#999' }}
-                  aria-hidden
+                <Avatar
+                  name={data.root.user?.display_name || data.root.user?.username || 'Unknown'}
+                  color={data.root.user?.avatar_color ?? '#999'}
+                  size={30}
                 />
                 <b className="font-display text-sm font-semibold text-ink">
                   {data.root.user?.display_name || data.root.user?.username}
                 </b>
+                {data.root.user?.is_bot && (
+                  <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>
+                )}
                 <time className="font-mono text-[9px] text-ink-3">{formatTime(data.root.created_at)}</time>
               </div>
               <div className="mt-1 text-sm text-ink">{renderMarkdown(data.root.body, { currentUsername })}</div>
             </div>
-            <div className="px-4 py-2 font-mono text-[11px] uppercase text-ink-3">
-              {data.data.length} {data.data.length === 1 ? 'reply' : 'replies'}
+            <div className="flex items-center gap-[10px] px-4 pb-1 pt-2.5">
+              <span className="lbl">
+                {data.data.length} {data.data.length === 1 ? 'reply' : 'replies'}
+              </span>
+              <div className="h-px flex-1 bg-rule" />
             </div>
             <div className="flex flex-col gap-1 px-4 pb-4">
               {data.data.map((reply) => {
@@ -86,14 +93,14 @@ export function ThreadPanel({ currentUsername }: { currentUsername?: string }) {
                 return (
                   <div key={reply.id} className="group flex items-baseline gap-2 py-1">
                     {grouped ? (
-                      <time className="w-5 shrink-0 text-[9px] text-ink-3 opacity-0 group-hover:opacity-100">
+                      <time className="w-[26px] shrink-0 text-[9px] text-ink-3 opacity-0 group-hover:opacity-100">
                         {formatTime(reply.created_at)}
                       </time>
                     ) : (
-                      <span
-                        className="h-5 w-5 shrink-0 rounded-full"
-                        style={{ backgroundColor: reply.user?.avatar_color ?? '#999' }}
-                        aria-hidden
+                      <Avatar
+                        name={reply.user?.display_name || reply.user?.username || 'Unknown'}
+                        color={reply.user?.avatar_color ?? '#999'}
+                        size={26}
                       />
                     )}
                     <div>
@@ -102,6 +109,9 @@ export function ThreadPanel({ currentUsername }: { currentUsername?: string }) {
                           <b className="font-display text-xs font-semibold text-ink">
                             {reply.user?.display_name || reply.user?.username}
                           </b>
+                          {reply.user?.is_bot && (
+                            <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>
+                          )}
                           <time className="font-mono text-[9px] text-ink-3">{formatTime(reply.created_at)}</time>
                         </div>
                       )}

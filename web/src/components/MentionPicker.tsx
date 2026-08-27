@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type User } from '../lib/api'
+import { Avatar } from './Avatar'
 
 export interface MentionCandidate {
   key: string
@@ -94,13 +95,12 @@ export function MentionPicker({
           }
         >
           {c.user ? (
-            <span
-              className="h-5 w-5 shrink-0 rounded-full"
-              style={{ backgroundColor: c.user.avatar_color }}
-              aria-hidden
-            />
+            <Avatar name={c.label} color={c.user.avatar_color} size={24} />
           ) : (
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-pollen-soft text-pollen">
+            <span
+              className="grid h-6 w-6 shrink-0 place-items-center bg-pollen-soft text-pollen"
+              style={{ borderRadius: 5 }}
+            >
               @
             </span>
           )}

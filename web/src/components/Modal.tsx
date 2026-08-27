@@ -61,7 +61,10 @@ export function Modal({
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[rgba(19,26,23,0.42)] pt-[11vh] backdrop-blur-[2px]"
+      onClick={onClose}
+    >
       <div
         ref={dialogRef}
         role="dialog"
@@ -70,7 +73,7 @@ export function Modal({
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={
-          'max-h-[70vh] w-full max-w-lg overflow-auto rounded-lg border border-rule bg-paper shadow-xl outline-none ' +
+          'modal-rise w-[min(660px,92vw)] overflow-hidden rounded-lg border border-rule bg-paper shadow-xl outline-none ' +
           (className ?? '')
         }
       >

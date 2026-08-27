@@ -125,13 +125,20 @@ export function SearchOverlay() {
         <h2 id="search-overlay-label" className="sr-only">
           Search
         </h2>
-        <input
-          ref={inputRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Search messages… (try in:general from:priya has:file)"
-          className="w-full rounded-md border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none focus-visible:ring-2 focus-visible:ring-teal"
-        />
+        <div className="flex items-center gap-2 rounded-md border border-rule bg-paper px-3 py-2">
+          <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 text-ink-3" aria-hidden>
+            <circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+            <line x1="10" y1="10" x2="14.5" y2="14.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Search every message…"
+            className="w-full bg-transparent text-sm text-ink outline-none"
+          />
+          <kbd className="shrink-0 rounded border border-rule px-1 font-mono text-[9px] text-ink-3">ESC</kbd>
+        </div>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {(
             [

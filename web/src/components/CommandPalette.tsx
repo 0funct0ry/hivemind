@@ -145,23 +145,23 @@ export function CommandPalette() {
         <h2 id="command-palette-label" className="sr-only">
           Command palette
         </h2>
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value)
-            setSelected(0)
-          }}
-          onKeyDown={handleKeyDown}
-          placeholder="Jump to a channel, DM, or person…"
-          className="w-full rounded-md border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none focus-visible:ring-2 focus-visible:ring-teal"
-        />
-      </div>
-      {results.length > 0 && (
-        <div className="px-3 pb-1 pt-2 font-mono text-[9.5px] uppercase tracking-wide text-ink-3">
-          {sectionLabel}
+        <div className="flex items-center gap-2 rounded-md border border-rule bg-paper px-3 py-2">
+          <kbd className="shrink-0 font-mono text-[10px] text-ink-3">⌘K</kbd>
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setSelected(0)
+            }}
+            onKeyDown={handleKeyDown}
+            placeholder="Jump to a channel, DM, or person…"
+            className="w-full bg-transparent text-sm text-ink outline-none"
+          />
+          <kbd className="shrink-0 rounded border border-rule px-1 font-mono text-[9px] text-ink-3">ESC</kbd>
         </div>
-      )}
+      </div>
+      {results.length > 0 && <div className="lbl px-3 pb-1 pt-2">{sectionLabel}</div>}
       <ul className="max-h-80 overflow-y-auto px-2 pb-2">
         {results.length === 0 && <li className="px-2 py-2 text-sm text-ink-3">No matches.</li>}
         {results.map((item, i) => (

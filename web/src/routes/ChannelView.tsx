@@ -9,6 +9,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useChannelBySlug, useDmByUsername } from '../hooks/useResolvedChannel'
 import { useUiStore } from '../store/ui'
 import { api } from '../lib/api'
+import { Avatar } from '../components/Avatar'
 
 const FACE_STACK_LIMIT = 5
 
@@ -43,16 +44,20 @@ function FaceStack({ channelId }: { channelId: string }) {
   return (
     <div className="flex items-center" aria-label={`${members.length} members`}>
       {visible.map((m) => (
-        <span
+        <Avatar
           key={m.id}
-          className="-ml-1.5 h-[22px] w-[22px] shrink-0 rounded-full border-[1.5px] border-paper first:ml-0"
-          style={{ backgroundColor: m.avatar_color }}
+          name={m.display_name || m.username}
+          color={m.avatar_color}
+          size={22}
+          className="-ml-1.5 border-[1.5px] border-paper first:ml-0"
           title={m.display_name || m.username}
-          aria-hidden
         />
       ))}
       {overflow > 0 && (
-        <span className="-ml-1.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border-[1.5px] border-paper bg-paper-3 font-mono text-[9px] text-ink-2">
+        <span
+          className="-ml-1.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center border-[1.5px] border-paper bg-paper-3 font-mono text-[9px] text-ink-2"
+          style={{ borderRadius: 5 }}
+        >
           +{overflow}
         </span>
       )}

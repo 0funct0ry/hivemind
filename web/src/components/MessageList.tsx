@@ -7,6 +7,8 @@ import { useUiStore } from '../store/ui'
 import { prefersReducedMotion } from '../lib/throttle'
 import { formatTime, formatDay, dayKey, relativeTime } from '../lib/time'
 import { shouldGroup } from '../lib/messageGrouping'
+import { fileTypeAbbrev } from '../lib/fileType'
+import { Avatar } from './Avatar'
 
 function AttachmentView({ att }: { att: Attachment }) {
   const isImage = att.mime.startsWith('image/')
@@ -19,7 +21,7 @@ function AttachmentView({ att }: { att: Attachment }) {
           <img
             src={att.url}
             alt={att.name}
-            className="max-h-[360px] max-w-[360px] rounded-md border border-rule object-cover"
+            className="max-h-[340px] max-w-[340px] rounded-md border border-rule object-cover"
           />
         </button>
         {lightbox && (
@@ -38,11 +40,15 @@ function AttachmentView({ att }: { att: Attachment }) {
     <a
       href={att.url}
       download={att.name}
-      className="mt-1 flex w-fit items-center gap-2 rounded-md border border-rule bg-paper-2 px-3 py-2 text-sm text-ink-2 hover:bg-paper-3"
+      className="mt-1.5 flex max-w-[330px] items-center gap-[9px] rounded-md border border-rule bg-paper px-[10px] py-[7px] text-sm text-ink-2 hover:bg-paper-3"
     >
-      <span aria-hidden>📎</span>
-      <span className="truncate">{att.name}</span>
-      <span className="font-mono text-xs text-ink-3">{Math.round(att.size / 1024)} KB</span>
+      <span className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded bg-paper-3 font-mono text-[8px] text-ink-2">
+        {fileTypeAbbrev(att.name)}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-[13px] font-medium text-ink">{att.name}</span>
+        <span className="font-mono text-[9px] text-ink-3">{Math.round(att.size / 1024)} KB</span>
+      </span>
     </a>
   )
 }
@@ -57,12 +63,16 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
 
   if (message.reply_count <= 0) return null
 
-  const faces: { id: string; color: string }[] = []
+  const faces: { id: string; color: string; name: string }[] = []
   const seen = new Set<string>()
   for (const reply of data?.data ?? []) {
     if (!reply.user || seen.has(reply.user.id)) continue
     seen.add(reply.user.id)
-    faces.push({ id: reply.user.id, color: reply.user.avatar_color })
+    faces.push({
+      id: reply.user.id,
+      color: reply.user.avatar_color,
+      name: reply.user.display_name || reply.user.username,
+    })
     if (faces.length >= 3) break
   }
 
@@ -75,12 +85,7 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
       {faces.length > 0 && (
         <span className="flex">
           {faces.map((f) => (
-            <span
-              key={f.id}
-              className="-ml-1.5 h-[18px] w-[18px] shrink-0 rounded-full border border-paper first:ml-0"
-              style={{ backgroundColor: f.color }}
-              aria-hidden
-            />
+            <Avatar key={f.id} name={f.name} color={f.color} size={18} className="-ml-1.5 border border-paper first:ml-0" />
           ))}
         </span>
       )}
@@ -118,11 +123,7 @@ function MessageRow({
             {formatTime(message.created_at)}
           </time>
         ) : (
-          <span
-            className="h-7 w-7 shrink-0 rounded-full"
-            style={{ backgroundColor: message.user?.avatar_color ?? '#999' }}
-            aria-hidden
-          />
+          <Avatar name={name} color={message.user?.avatar_color ?? '#999'} size={30} />
         )}
       </div>
       <div className={message.status === 'sending' ? 'opacity-60' : ''}>
@@ -130,7 +131,7 @@ function MessageRow({
           <div className="flex items-baseline gap-2">
             <b className="font-display text-sm font-semibold text-ink">{name}</b>
             {message.user?.is_bot && (
-              <span className="rounded bg-paper-3 px-1 font-mono text-[10px] text-ink-3">BOT</span>
+              <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>
             )}
             <time className="font-mono text-[11px] text-ink-3">{formatTime(message.created_at)}</time>
           </div>
@@ -217,10 +218,10 @@ export const MessageList = forwardRef<
     scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`) ?? null
 
   const scrollAndHighlight = (el: HTMLElement, highlight: boolean) => {
-    el.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
-    if (!highlight) return
-    el.classList.add('bg-pollen-soft')
-    window.setTimeout(() => el.classList.remove('bg-pollen-soft'), 1200)
+    el.scrollIntoView({ block: 'center' })
+    if (!highlight || prefersReducedMotion()) return
+    el.classList.add('flash-highlight')
+    window.setTimeout(() => el.classList.remove('flash-highlight'), 1400)
   }
 
   useImperativeHandle(
@@ -266,7 +267,7 @@ export const MessageList = forwardRef<
       onScroll={handleScroll}
       role="log"
       aria-live="polite"
-      className="flex-1 overflow-y-auto"
+      className="stream flex-1 overflow-y-auto"
     >
       <div ref={sentinelRef} />
       {isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-3">Loading…</div>}
@@ -286,10 +287,12 @@ export const MessageList = forwardRef<
         return (
           <div key={m.id}>
             {showDay && (
-              <div className="sticky top-0 z-10 flex justify-center py-2">
-                <span className="rounded-full bg-paper-2 px-3 py-1 font-mono text-[11px] text-ink-2 shadow-sm">
+              <div className="sticky top-0 z-10 flex items-center gap-3 px-4 py-2.5">
+                <div className="h-px flex-1 bg-rule-soft" />
+                <span className="lbl rounded-full border border-rule bg-paper-2 px-2.5 py-0.5">
                   {formatDay(m.created_at)}
                 </span>
+                <div className="h-px flex-1 bg-rule-soft" />
               </div>
             )}
             {showUnreadDivider && (

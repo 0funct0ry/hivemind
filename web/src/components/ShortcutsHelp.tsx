@@ -22,13 +22,13 @@ export function ShortcutsHelp() {
 
   return (
     <Modal open={open} onClose={close} labelledBy="shortcuts-help-label">
-      <div className="p-4">
+      <div className="max-h-[52vh] overflow-y-auto p-4">
         <h2 id="shortcuts-help-label" className="mb-3 font-display text-lg font-semibold text-ink">
           Keyboard shortcuts
         </h2>
         {[...groups.entries()].map(([category, shortcuts]) => (
           <div key={category} className="mb-4 last:mb-0">
-            <div className="mb-1 font-mono text-[11px] uppercase tracking-wide text-ink-3">{category}</div>
+            <div className="lbl mb-1">{category}</div>
             <dl className="flex flex-col gap-1">
               {shortcuts.map((s) => (
                 <div key={s.combo} className="flex items-center justify-between gap-4 text-sm">

@@ -16,7 +16,7 @@ export default {
         'rule-soft': '#E2E7DF',
         teal: '#0E6E60',
         'teal-soft': '#DCEBE6',
-        pollen: '#D4930B',
+        pollen: '#C9860A',
         'pollen-soft': '#F6E7C6',
         deep: '#101917',
       },

@@ -26,11 +26,11 @@ export function TypingIndicator({ channelId, currentUserId }: { channelId: strin
   const rest = userIds.length - shown.length
 
   return (
-    <div className="flex items-center gap-2 px-4 py-1 font-mono text-xs text-ink-3">
+    <div className="flex items-center gap-2 px-4 py-1 font-mono text-xs italic text-ink-3">
       <span className="flex gap-0.5">
-        <i className="h-1 w-1 animate-bounce rounded-full bg-ink-3 [animation-delay:0ms]" />
-        <i className="h-1 w-1 animate-bounce rounded-full bg-ink-3 [animation-delay:150ms]" />
-        <i className="h-1 w-1 animate-bounce rounded-full bg-ink-3 [animation-delay:300ms]" />
+        <i className="typing-dot h-[3.5px] w-[3.5px] rounded-full bg-ink-3 [animation-delay:0ms]" />
+        <i className="typing-dot h-[3.5px] w-[3.5px] rounded-full bg-ink-3 [animation-delay:150ms]" />
+        <i className="typing-dot h-[3.5px] w-[3.5px] rounded-full bg-ink-3 [animation-delay:300ms]" />
       </span>
       <span>
         {shown.map((id, i) => (

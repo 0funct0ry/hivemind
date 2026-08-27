@@ -67,10 +67,8 @@ function renderText(text: string, keyBase: number, opts: RenderOptions): ReactNo
       node: (
         <span
           key={`m${start}`}
-          className={
-            'rounded px-1 font-medium ' +
-            (isSelf || isSpecial ? 'bg-pollen-soft text-pollen' : 'bg-teal-soft text-teal')
-          }
+          className={'rounded px-1 font-medium ' + (isSelf || isSpecial ? 'bg-pollen-soft' : 'bg-teal-soft text-teal')}
+          style={isSelf || isSpecial ? { color: '#8A5A00' } : undefined}
         >
           @{name}
         </span>
@@ -157,10 +155,17 @@ export function renderMarkdown(body: string, opts: RenderOptions = {}): ReactNod
       key += 1000
     }
     const code = m[2].replace(/\n$/, '')
+    const lines = code.split('\n')
     blocks.push(
       <pre key={`fence${key++}`} className="group relative overflow-x-auto rounded-md bg-deep p-3 font-mono text-[13px] text-paper">
         <CopyButton text={code} />
-        <code>{code}</code>
+        <code>
+          {lines.map((line, i) => (
+            <div key={i} style={line.trimStart().startsWith('#') ? { color: '#7E9C90' } : undefined}>
+              {line.length > 0 ? line : ' '}
+            </div>
+          ))}
+        </code>
       </pre>,
     )
     lastIndex = m.index! + m[0].length

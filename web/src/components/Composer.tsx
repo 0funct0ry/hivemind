@@ -5,6 +5,7 @@ import { useUiStore } from '../store/ui'
 import { wsClient } from '../lib/ws'
 import { throttle } from '../lib/throttle'
 import { MentionPicker, useMentionCandidates } from './MentionPicker'
+import { fileTypeAbbrev } from '../lib/fileType'
 
 interface UploadChip {
   id: string
@@ -188,7 +189,7 @@ export function Composer({
         />
       )}
       <div
-        className="rounded-md border border-rule bg-paper-2 focus-within:border-teal"
+        className="rounded-md border border-rule bg-paper"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault()
@@ -198,7 +199,10 @@ export function Composer({
         {uploads.length > 0 && (
           <div className="flex flex-wrap gap-2 p-2">
             {uploads.map((u) => (
-              <div key={u.id} className="flex items-center gap-2 rounded bg-paper px-2 py-1 text-xs">
+              <div key={u.id} className="flex items-center gap-2 rounded bg-paper-2 px-2 py-1 text-xs">
+                <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded bg-paper-3 font-mono text-[7px] text-ink-2">
+                  {fileTypeAbbrev(u.name)}
+                </span>
                 <span className="max-w-[140px] truncate">{u.name}</span>
                 {u.error ? (
                   <span className="text-red-600">{u.error}</span>
@@ -275,7 +279,7 @@ export function Composer({
             type="button"
             disabled={!canSend}
             onClick={handleSend}
-            className="rounded bg-teal px-3 py-1 text-sm font-medium text-white disabled:opacity-40"
+            className="rounded bg-teal px-3 py-1 text-sm font-medium text-white hover:bg-[#0B564B] disabled:opacity-40 disabled:hover:bg-teal"
           >
             Send <kbd className="ml-1 font-mono text-[10px] opacity-70">↵</kbd>
           </button>
