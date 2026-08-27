@@ -1,33 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type Attachment, type Message } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
 import { useMessages } from '../hooks/useMessages'
 import { useUiStore } from '../store/ui'
 import { prefersReducedMotion } from '../lib/throttle'
-
-const GROUP_WINDOW_MS = 5 * 60 * 1000
-
-function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-}
-
-function formatDay(ts: number): string {
-  return new Date(ts).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
-}
-
-function dayKey(ts: number): string {
-  const d = new Date(ts)
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
-}
-
-function relativeTime(ts: number): string {
-  const diffMin = Math.max(1, Math.round((Date.now() - ts) / 60000))
-  if (diffMin < 60) return `${diffMin}m ago`
-  const diffHr = Math.round(diffMin / 60)
-  if (diffHr < 24) return `${diffHr}h ago`
-  return `${Math.round(diffHr / 24)}d ago`
-}
+import { formatTime, formatDay, dayKey, relativeTime } from '../lib/time'
+import { shouldGroup } from '../lib/messageGrouping'
 
 function AttachmentView({ att }: { att: Attachment }) {
   const isImage = att.mime.startsWith('image/')
@@ -69,13 +48,42 @@ function AttachmentView({ att }: { att: Attachment }) {
 }
 
 function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void }) {
+  const { data } = useQuery({
+    queryKey: ['thread-preview', message.id],
+    queryFn: () => api.listReplies(message.id, { limit: 3 }),
+    enabled: message.reply_count > 0,
+    staleTime: 30_000,
+  })
+
   if (message.reply_count <= 0) return null
+
+  const faces: { id: string; color: string }[] = []
+  const seen = new Set<string>()
+  for (const reply of data?.data ?? []) {
+    if (!reply.user || seen.has(reply.user.id)) continue
+    seen.add(reply.user.id)
+    faces.push({ id: reply.user.id, color: reply.user.avatar_color })
+    if (faces.length >= 3) break
+  }
+
   return (
     <button
       type="button"
       onClick={onOpen}
       className="mt-1 flex w-fit items-center gap-2 rounded-md px-2 py-1 text-sm text-teal hover:bg-teal-soft"
     >
+      {faces.length > 0 && (
+        <span className="flex">
+          {faces.map((f) => (
+            <span
+              key={f.id}
+              className="-ml-1.5 h-[18px] w-[18px] shrink-0 rounded-full border border-paper first:ml-0"
+              style={{ backgroundColor: f.color }}
+              aria-hidden
+            />
+          ))}
+        </span>
+      )}
       <span>
         {message.reply_count} {message.reply_count === 1 ? 'reply' : 'replies'}
       </span>
@@ -268,7 +276,7 @@ export const MessageList = forwardRef<
         const showUnreadDivider = Boolean(
           !dividerRendered && unreadAnchor && m.id !== unreadAnchor && Number(m.id) > Number(unreadAnchor),
         )
-        const grouped = lastAuthor === m.user_id && m.created_at - lastTs < GROUP_WINDOW_MS && !showUnreadDivider
+        const grouped = shouldGroup(lastAuthor, lastTs, m.user_id, m.created_at, showUnreadDivider)
 
         lastAuthor = m.user_id
         lastTs = m.created_at

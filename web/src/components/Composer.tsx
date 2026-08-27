@@ -86,6 +86,41 @@ export function Composer({
     }
   }
 
+  const openMentionPickerAtCursor = () => {
+    const ta = textareaRef.current
+    const cursor = ta?.selectionStart ?? body.length
+    const before = body.slice(0, cursor)
+    const needsSpace = before.length > 0 && !/\s$/.test(before)
+    const insertion = `${needsSpace ? ' ' : ''}@`
+    const next = `${before}${insertion}${body.slice(cursor)}`
+    setBody(next)
+    persistDraft(next)
+    const newCursor = cursor + insertion.length
+    setMentionQuery('')
+    setMentionStart(newCursor - 1)
+    requestAnimationFrame(() => {
+      ta?.focus()
+      ta?.setSelectionRange(newCursor, newCursor)
+    })
+  }
+
+  const toggleCodeBlock = () => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    const selected = body.slice(start, end)
+    const fenced = selected ? '```\n' + selected + '\n```' : '```\n\n```'
+    const next = body.slice(0, start) + fenced + body.slice(end)
+    setBody(next)
+    persistDraft(next)
+    const cursor = selected ? start + fenced.length : start + 4
+    requestAnimationFrame(() => {
+      ta.focus()
+      ta.setSelectionRange(cursor, cursor)
+    })
+  }
+
   const insertMention = (name: string) => {
     const cursor = textareaRef.current?.selectionStart ?? body.length
     const next = `${body.slice(0, mentionStart)}@${name} ${body.slice(cursor)}`
@@ -191,7 +226,7 @@ export function Composer({
           }}
           placeholder={placeholder ?? 'Message'}
           rows={1}
-          className="w-full resize-none bg-transparent px-3 py-2 text-sm text-ink"
+          className="w-full resize-none appearance-none bg-transparent px-3 py-2 text-sm text-ink shadow-none outline-none focus:shadow-none focus:outline-none focus-visible:shadow-none focus-visible:outline-none"
         />
         <div className="flex items-center justify-between px-3 pb-2">
           <div className="flex items-center gap-2">
@@ -207,6 +242,24 @@ export function Composer({
                 }}
               />
             </label>
+            <button
+              type="button"
+              title="Mention someone"
+              aria-label="Mention someone"
+              onClick={openMentionPickerAtCursor}
+              className="px-1 text-ink-3 hover:text-ink"
+            >
+              @
+            </button>
+            <button
+              type="button"
+              title="Code block"
+              aria-label="Code block"
+              onClick={toggleCodeBlock}
+              className="px-1 font-mono text-xs text-ink-3 hover:text-ink"
+            >
+              {'</>'}
+            </button>
             {threadId && (
               <label className="flex items-center gap-1 font-mono text-[11px] text-ink-2">
                 <input
@@ -227,6 +280,13 @@ export function Composer({
             Send <kbd className="ml-1 font-mono text-[10px] opacity-70">↵</kbd>
           </button>
         </div>
+      </div>
+      <div className="flex gap-3 px-1 pt-1.5 font-mono text-[9px] text-ink-3">
+        <span>↵ send</span>
+        <span>⇧↵ newline</span>
+        <span>@ mention</span>
+        <span>⌘K jump</span>
+        <span>⌘/ search</span>
       </div>
     </div>
   )

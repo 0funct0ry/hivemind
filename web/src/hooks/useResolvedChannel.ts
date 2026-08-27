@@ -5,6 +5,8 @@ import { api } from '../lib/api'
 export interface ResolvedChannel {
   id: string
   name: string
+  topic: string
+  kind: 'public' | 'private' | 'dm' | null
   lastReadMessageId: string | null
   isLoading: boolean
 }
@@ -16,6 +18,8 @@ export function useChannelBySlug(slug: string | undefined): ResolvedChannel {
   return {
     id: channel?.id ?? '',
     name: channel?.name ?? slug ?? '',
+    topic: channel?.topic ?? '',
+    kind: channel?.kind ?? null,
     lastReadMessageId: channel?.last_read_message_id ?? null,
     isLoading: query.isLoading,
   }
@@ -49,6 +53,8 @@ export function useDmByUsername(username: string | undefined): ResolvedChannel {
   return {
     id: dm?.id ?? '',
     name: dm?.peer.display_name || dm?.peer.username || username || '',
+    topic: '',
+    kind: dm ? 'dm' : null,
     lastReadMessageId: dm?.last_read_message_id ?? null,
     isLoading: dmsQuery.isLoading || (!dm && creating),
   }

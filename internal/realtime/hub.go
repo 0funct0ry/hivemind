@@ -394,3 +394,16 @@ func (h *Hub) IsOnline(userID int64) bool {
 	defer h.mu.RUnlock()
 	return len(h.conns[userID]) > 0
 }
+
+// OnlineUserIDs returns the ids of every user with at least one active WebSocket connection.
+func (h *Hub) OnlineUserIDs() []int64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ids := make([]int64, 0, len(h.conns))
+	for userID, conns := range h.conns {
+		if len(conns) > 0 {
+			ids = append(ids, userID)
+		}
+	}
+	return ids
+}

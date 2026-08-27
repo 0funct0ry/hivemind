@@ -178,6 +178,8 @@ export const api = {
   },
   createDM: (userId: string) =>
     request<{ channel: DM }>('/dms', { method: 'POST', body: JSON.stringify({ user_id: userId }) }),
+  listChannelMembers: (channelId: string) => request<{ data: User[] }>(`/channels/${channelId}/members`),
+  getPresence: () => request<{ online: string[] }>('/presence'),
 
   listMessages: (
     channelId: string,

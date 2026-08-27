@@ -36,7 +36,9 @@ export function AppShell() {
     <div
       className={
         'grid h-full grid-rows-[auto_1fr] ' +
-        (openThreadId ? 'grid-cols-[244px_minmax(0,1fr)_372px]' : 'grid-cols-[244px_minmax(0,1fr)]')
+        (openThreadId
+          ? 'grid-cols-[244px_minmax(0,1fr)_372px] max-[900px]:grid-cols-[200px_minmax(0,1fr)_372px]'
+          : 'grid-cols-[244px_minmax(0,1fr)] max-[900px]:grid-cols-[200px_minmax(0,1fr)]')
       }
     >
       <div className="col-span-full">

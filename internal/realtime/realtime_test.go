@@ -391,3 +391,89 @@ func TestResumeCommand(t *testing.T) {
 		t.Errorf("expected gap count of 2, got %d", gapCount)
 	}
 }
+
+func TestPresenceAPI(t *testing.T) {
+	api.DisableRateLimits = true
+	defer func() { api.DisableRateLimits = false }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	a := auth.New(s, 24*time.Hour)
+	cfg := config.Config{WorkspaceName: "Test Workspace"}
+	r := api.NewRouter(s, a, cfg)
+
+	u1, _ := s.CreateUser(ctx, store.UserInput{Username: "presenceone", Email: "p1@example.com", PasswordHash: "hash"})
+	u2, _ := s.CreateUser(ctx, store.UserInput{Username: "presencetwo", Email: "p2@example.com", PasswordHash: "hash"})
+	s1, _ := a.CreateSession(ctx, u1.ID, "UA", "127.0.0.1")
+	s2, _ := a.CreateSession(ctx, u2.ID, "UA", "127.0.0.1")
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	getPresence := func(sessionID string) map[string]bool {
+		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/presence", nil)
+		req.Header.Set("Cookie", "hm_session="+sessionID)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		var out struct {
+			Online []string `json:"online"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("unmarshal presence response %q: %v", body, err)
+		}
+		set := map[string]bool{}
+		for _, id := range out.Online {
+			set[id] = true
+		}
+		return set
+	}
+
+	// No one connected yet.
+	online := getPresence(s1)
+	if online[strconv.FormatInt(u1.ID, 10)] {
+		t.Fatalf("expected u1 not online before connecting, got %v", online)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/ws"
+	headers := http.Header{}
+	headers.Set("Cookie", "hm_session="+s1)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hello realtime.Frame
+	_ = ws.ReadJSON(&hello)
+
+	// Give the hub's register command a moment to be processed.
+	time.Sleep(50 * time.Millisecond)
+
+	online = getPresence(s2)
+	if !online[strconv.FormatInt(u1.ID, 10)] {
+		t.Fatalf("expected u1 online after connecting, got %v", online)
+	}
+	if online[strconv.FormatInt(u2.ID, 10)] {
+		t.Fatalf("expected u2 not online, got %v", online)
+	}
+
+	ws.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	online = getPresence(s2)
+	if online[strconv.FormatInt(u1.ID, 10)] {
+		t.Fatalf("expected u1 offline after disconnecting, got %v", online)
+	}
+}

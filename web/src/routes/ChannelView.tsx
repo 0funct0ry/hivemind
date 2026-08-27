@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom'
 import { useEffect, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { MessageList, type MessageListHandle } from '../components/MessageList'
 import { Composer } from '../components/Composer'
 import { PulseRuler } from '../components/PulseRuler'
@@ -7,6 +8,93 @@ import { TypingIndicator } from '../components/TypingIndicator'
 import { useAuth } from '../hooks/useAuth'
 import { useChannelBySlug, useDmByUsername } from '../hooks/useResolvedChannel'
 import { useUiStore } from '../store/ui'
+import { api } from '../lib/api'
+
+const FACE_STACK_LIMIT = 5
+
+function SearchButton() {
+  const openSearchOverlay = useUiStore((s) => s.openSearchOverlay)
+  return (
+    <button
+      type="button"
+      onClick={() => openSearchOverlay()}
+      className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] text-ink-2 hover:bg-paper-2 hover:text-ink"
+    >
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+        <circle cx="7" cy="7" r="4.4" />
+        <path d="M10.3 10.3 14 14" />
+      </svg>
+      Search
+    </button>
+  )
+}
+
+function FaceStack({ channelId }: { channelId: string }) {
+  const { data } = useQuery({
+    queryKey: ['channel-members', channelId],
+    queryFn: () => api.listChannelMembers(channelId),
+    enabled: !!channelId,
+  })
+  const members = data?.data ?? []
+  if (members.length === 0) return null
+  const visible = members.slice(0, FACE_STACK_LIMIT)
+  const overflow = members.length - visible.length
+
+  return (
+    <div className="flex items-center" aria-label={`${members.length} members`}>
+      {visible.map((m) => (
+        <span
+          key={m.id}
+          className="-ml-1.5 h-[22px] w-[22px] shrink-0 rounded-full border-[1.5px] border-paper first:ml-0"
+          style={{ backgroundColor: m.avatar_color }}
+          title={m.display_name || m.username}
+          aria-hidden
+        />
+      ))}
+      {overflow > 0 && (
+        <span className="-ml-1.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border-[1.5px] border-paper bg-paper-3 font-mono text-[9px] text-ink-2">
+          +{overflow}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function ChannelHeader({
+  channelId,
+  name,
+  topic,
+  isPrivate,
+}: {
+  channelId: string
+  name: string
+  topic: string
+  isPrivate: boolean
+}) {
+  return (
+    <header className="flex items-center gap-3 border-b border-rule px-4 py-3">
+      <h2 className="flex items-center gap-1 font-display text-lg font-semibold text-ink">
+        <span className="font-normal text-ink-3">{isPrivate ? '🔒' : '#'}</span>
+        {name}
+      </h2>
+      {topic && <span className="truncate border-l border-rule pl-3 text-[13px] text-ink-2">{topic}</span>}
+      <FaceStack channelId={channelId} />
+      <SearchButton />
+    </header>
+  )
+}
+
+function DmHeader({ name }: { name: string }) {
+  return (
+    <header className="flex items-center gap-3 border-b border-rule px-4 py-3">
+      <h2 className="font-display text-lg font-semibold text-ink">@{name}</h2>
+      <span className="truncate border-l border-rule pl-3 text-[13px] text-ink-2">
+        Direct message · only the two of you
+      </span>
+      <SearchButton />
+    </header>
+  )
+}
 
 /** Consumes a cross-route pendingJump handoff (from a search result) once its target
  * channel is mounted. */
@@ -29,9 +117,12 @@ export function ChannelView() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-rule px-4 py-3">
-        <h2 className="font-display text-lg font-semibold text-ink"># {channel.name}</h2>
-      </header>
+      <ChannelHeader
+        channelId={channel.id}
+        name={channel.name}
+        topic={channel.topic}
+        isPrivate={channel.kind === 'private'}
+      />
       {channel.isLoading || !channel.id ? (
         <div role="log" aria-live="polite" className="flex flex-1 items-center justify-center text-ink-3">
           Loading…
@@ -65,9 +156,7 @@ export function DmView() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-rule px-4 py-3">
-        <h2 className="font-display text-lg font-semibold text-ink">@{dm.name}</h2>
-      </header>
+      <DmHeader name={dm.name} />
       {dm.isLoading || !dm.id ? (
         <div role="log" aria-live="polite" className="flex flex-1 items-center justify-center text-ink-3">
           Loading…

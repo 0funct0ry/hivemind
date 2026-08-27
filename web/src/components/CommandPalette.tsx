@@ -117,6 +117,8 @@ export function CommandPalette() {
       .map((m) => m.item)
   }
 
+  const sectionLabel = query.trim() === '' ? 'Recent' : 'Matches'
+
   const activate = (item: PaletteItem, openAsDM: boolean) => {
     pushRecent({ type: item.type, id: item.id, label: item.label, path: item.path })
     navigate(openAsDM && item.type === 'person' ? `/dm/${item.sublabel?.replace('@', '')}` : item.path)
@@ -155,6 +157,11 @@ export function CommandPalette() {
           className="w-full rounded-md border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none focus-visible:ring-2 focus-visible:ring-teal"
         />
       </div>
+      {results.length > 0 && (
+        <div className="px-3 pb-1 pt-2 font-mono text-[9.5px] uppercase tracking-wide text-ink-3">
+          {sectionLabel}
+        </div>
+      )}
       <ul className="max-h-80 overflow-y-auto px-2 pb-2">
         {results.length === 0 && <li className="px-2 py-2 text-sm text-ink-3">No matches.</li>}
         {results.map((item, i) => (
@@ -173,6 +180,11 @@ export function CommandPalette() {
           </li>
         ))}
       </ul>
+      <div className="flex gap-4 border-t border-rule bg-paper-2 px-3.5 py-2 font-mono text-[9px] text-ink-3">
+        <span>↑↓ navigate</span>
+        <span>↵ open</span>
+        <span>⌘↵ open DM</span>
+      </div>
     </Modal>
   )
 }

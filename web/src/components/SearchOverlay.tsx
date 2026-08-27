@@ -69,15 +69,40 @@ export function SearchOverlay() {
 
   const { filters, rest } = parseInlineFilters(text)
 
+  const fetchStartedAt = useRef(0)
+  const [elapsedMs, setElapsedMs] = useState(0)
   const { data, isFetching } = useQuery({
     queryKey: ['search', rest, filters.in, filters.from, filters.has],
-    queryFn: () => api.search({ q: rest, in: filters.in, from: filters.from, has: filters.has, limit: 30 }),
+    queryFn: () => {
+      fetchStartedAt.current = Date.now()
+      return api.search({ q: rest, in: filters.in, from: filters.from, has: filters.has, limit: 30 })
+    },
     enabled: open && rest.trim() !== '',
   })
+  useEffect(() => {
+    if (!isFetching && fetchStartedAt.current) setElapsedMs(Date.now() - fetchStartedAt.current)
+  }, [isFetching])
 
   if (!open) return null
 
   const hits: SearchHit[] = data?.data ?? []
+
+  const tokenPattern = (token: 'in:' | 'from:' | 'has:file' | 'has:link'): RegExp =>
+    token === 'in:' || token === 'from:' ? new RegExp(`\\b${token}\\S*`, 'i') : new RegExp(`\\b${token}\\b`, 'i')
+
+  const toggleToken = (token: 'in:' | 'from:' | 'has:file' | 'has:link') => {
+    const re = tokenPattern(token)
+    if (re.test(text)) {
+      setText((t) => t.replace(re, '').replace(/\s+/g, ' ').trim())
+      return
+    }
+    const next = text.trim().length ? `${text.trim()} ${token}` : token
+    setText(next)
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.setSelectionRange(next.length, next.length)
+    })
+  }
 
   const jumpTo = (hit: SearchHit) => {
     close()
@@ -107,13 +132,33 @@ export function SearchOverlay() {
           placeholder="Search messages… (try in:general from:priya has:file)"
           className="w-full rounded-md border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none focus-visible:ring-2 focus-visible:ring-teal"
         />
-        {(filters.in || filters.from || filters.has) && (
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {filters.in && <span className="rounded-full bg-paper-3 px-2 py-0.5 font-mono text-[11px] text-ink-2">in: {filters.in}</span>}
-            {filters.from && <span className="rounded-full bg-paper-3 px-2 py-0.5 font-mono text-[11px] text-ink-2">from: {filters.from}</span>}
-            {filters.has && <span className="rounded-full bg-paper-3 px-2 py-0.5 font-mono text-[11px] text-ink-2">has: {filters.has}</span>}
-          </div>
-        )}
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {(
+            [
+              ['in:', filters.in ? `in: ${filters.in}` : 'in: #channel'],
+              ['from:', filters.from ? `from: ${filters.from}` : 'from: @user'],
+              ['has:file', 'has: file'],
+              ['has:link', 'has: link'],
+            ] as const
+          ).map(([token, label]) => {
+            const active = tokenPattern(token).test(text)
+            return (
+              <button
+                key={token}
+                type="button"
+                onClick={() => toggleToken(token)}
+                className={
+                  'rounded-full border px-2 py-0.5 font-mono text-[9.5px] ' +
+                  (active
+                    ? 'border-teal bg-teal text-white'
+                    : 'border-rule bg-paper text-ink-2 hover:border-ink-3')
+                }
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
       </div>
       <ul className="max-h-96 overflow-y-auto px-2 pb-2">
         {rest.trim() === '' && <li className="px-2 py-2 text-sm text-ink-3">Type to search.</li>}
@@ -139,6 +184,14 @@ export function SearchOverlay() {
           </li>
         ))}
       </ul>
+      {rest.trim() !== '' && !isFetching && (
+        <div className="flex gap-4 border-t border-rule bg-paper-2 px-3.5 py-2 font-mono text-[9px] text-ink-3">
+          <span>
+            {hits.length} {hits.length === 1 ? 'result' : 'results'} · {elapsedMs}ms
+          </span>
+          <span className="ml-auto">Only channels you're in</span>
+        </div>
+      )}
     </Modal>
   )
 }

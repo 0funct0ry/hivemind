@@ -147,6 +147,7 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 
 	v1.GET("/search", search(s))
 	v1.GET("/unreads", unreadSummary(s))
+	v1.GET("/presence", presence(h))
 
 	v1.POST("/uploads", uploadFile(fs))
 	v1.GET("/files/:id/:name", serveFile(fs))
