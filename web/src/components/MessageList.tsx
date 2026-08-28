@@ -63,7 +63,7 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
 
   if (message.reply_count <= 0) return null
 
-  const faces: { id: string; color: string; name: string }[] = []
+  const faces: { id: string; color: string; name: string; avatarUrl?: string }[] = []
   const seen = new Set<string>()
   for (const reply of data?.data ?? []) {
     if (!reply.user || seen.has(reply.user.id)) continue
@@ -72,6 +72,7 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
       id: reply.user.id,
       color: reply.user.avatar_color,
       name: reply.user.display_name || reply.user.username,
+      avatarUrl: reply.user.avatar_url,
     })
     if (faces.length >= 3) break
   }
@@ -85,7 +86,7 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
       {faces.length > 0 && (
         <span className="flex">
           {faces.map((f) => (
-            <Avatar key={f.id} name={f.name} color={f.color} size={18} className="-ml-1.5 border border-paper first:ml-0" />
+            <Avatar key={f.id} name={f.name} color={f.color} avatarUrl={f.avatarUrl} size={18} className="-ml-1.5 border border-paper first:ml-0" />
           ))}
         </span>
       )}
@@ -123,7 +124,7 @@ function MessageRow({
             {formatTime(message.created_at)}
           </time>
         ) : (
-          <Avatar name={name} color={message.user?.avatar_color ?? '#999'} size={30} />
+          <Avatar name={name} color={message.user?.avatar_color ?? '#999'} avatarUrl={message.user?.avatar_url} size={30} />
         )}
       </div>
       <div className={message.status === 'sending' ? 'opacity-60' : ''}>

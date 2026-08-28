@@ -95,7 +95,7 @@ export function MentionPicker({
           }
         >
           {c.user ? (
-            <Avatar name={c.label} color={c.user.avatar_color} size={24} />
+            <Avatar name={c.label} color={c.user.avatar_color} avatarUrl={c.user.avatar_url} size={24} />
           ) : (
             <span
               className="grid h-6 w-6 shrink-0 place-items-center bg-pollen-soft text-pollen"

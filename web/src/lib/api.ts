@@ -15,9 +15,11 @@ export interface User {
   email: string
   display_name: string
   avatar_color: string
+  avatar_url?: string
   role: string
   is_bot: boolean
   status: string
+  created_at?: number
 }
 
 export interface Channel {
@@ -54,6 +56,7 @@ export interface MessageUser {
   username: string
   display_name: string
   avatar_color: string
+  avatar_url?: string
   is_bot: boolean
 }
 
@@ -166,6 +169,11 @@ export const api = {
   setup: (token: string, username: string, email: string, password: string) =>
     request<{ user: User }>('/setup', { method: 'POST', body: JSON.stringify({ token, username, email, password }) }),
   listChannels: () => request<{ data: Channel[] }>('/channels'),
+  listJoinableChannels: () => request<{ data: Channel[] }>('/channels?joinable=true'),
+  createChannel: (body: { kind: 'public' | 'private'; slug: string; name: string; topic?: string }) => request<{ channel: Channel }>('/channels', { method: 'POST', body: JSON.stringify(body) }),
+  joinChannel: (id: string) => request<void>(`/channels/${id}/join`, { method: 'POST' }),
+  leaveChannel: (id: string) => request<void>(`/channels/${id}/leave`, { method: 'POST' }),
+  updateMe: (patch: { display_name?: string; avatar_file_id?: string | null }) => request<{ user: User }>('/users/me', { method: 'PATCH', body: JSON.stringify(patch) }),
   listDMs: () => request<{ data: DM[] }>('/dms'),
   unreadSummary: () => request<{ data: UnreadEntry[] }>('/unreads'),
   getUser: (id: string) => request<{ user: User }>(`/users/${id}`),
@@ -256,4 +264,5 @@ export const api = {
       form.append('file', file)
       xhr.send(form)
     }),
+  uploadAvatar: (file: File) => api.uploadFile(file),
 }

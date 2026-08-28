@@ -99,7 +99,14 @@ func publicChannelDetails(ch store.ChannelDetails) gin.H {
 func channelList(s *store.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		me, _ := CurrentUser(c)
-		list, err := s.ListVisibleChannels(c.Request.Context(), me.ID)
+		var list []store.ChannelDetails
+		var err error
+		if c.Query("joinable") == "true" {
+			list, err = s.ListJoinableChannels(c.Request.Context(), me.ID)
+		} else {
+			includeArchived := c.Query("include_archived") == "true" && me.Role == "admin"
+			list, err = s.ListVisibleChannels(c.Request.Context(), me.ID, includeArchived)
+		}
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not list channels.")
 			return
@@ -166,14 +173,38 @@ func channelUpdate(s *store.Store) gin.HandlerFunc {
 			return
 		}
 		var in struct {
-			Name  string `json:"name"`
-			Topic string `json:"topic"`
+			Name     *string `json:"name"`
+			Topic    *string `json:"topic"`
+			Archived *bool   `json:"archived"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
 			httpx.Fail(c, 400, "invalid_request", "Invalid request body.")
 			return
 		}
-		if err := s.UpdateChannel(c.Request.Context(), ch.ID, in.Name, in.Topic); err != nil {
+		if in.Archived != nil {
+			if ch.Kind == "dm" {
+				httpx.Fail(c, 400, "channel_not_archivable", "DM channels cannot be archived.")
+				return
+			}
+			var err error
+			if *in.Archived {
+				err = s.ArchiveChannel(c.Request.Context(), ch.ID)
+			} else {
+				err = s.UnarchiveChannel(c.Request.Context(), ch.ID)
+			}
+			if err != nil {
+				httpx.Fail(c, 400, "invalid_channel", err.Error())
+				return
+			}
+		}
+		name, topic := ch.Name, ch.Topic
+		if in.Name != nil {
+			name = *in.Name
+		}
+		if in.Topic != nil {
+			topic = *in.Topic
+		}
+		if err := s.UpdateChannel(c.Request.Context(), ch.ID, name, topic); err != nil {
 			httpx.Fail(c, 400, "invalid_channel", err.Error())
 			return
 		}
@@ -191,6 +222,10 @@ func channelJoin(s *store.Store) gin.HandlerFunc {
 		me, _ := CurrentUser(c)
 		ch, _, ok := resolveChannel(c, s, me.ID)
 		if !ok {
+			return
+		}
+		if ch.ArchivedAt != nil {
+			httpx.Fail(c, 400, "channel_archived", "This channel is archived.")
 			return
 		}
 		if ch.Kind != "public" {

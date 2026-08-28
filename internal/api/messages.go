@@ -63,6 +63,7 @@ func publicMessage(m store.Message) gin.H {
 			"username":     m.User.Username,
 			"display_name": m.User.DisplayName,
 			"avatar_color": m.User.AvatarColor,
+			"avatar_url":   m.User.AvatarURL,
 			"is_bot":       m.User.IsBot,
 		}
 	}
@@ -130,6 +131,10 @@ func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 		// 2. Resolve Channel
 		ch, _, ok := resolveChannel(c, s, me.ID)
 		if !ok {
+			return
+		}
+		if ch.ArchivedAt != nil {
+			httpx.Fail(c, 400, "channel_archived", "This channel is archived.")
 			return
 		}
 

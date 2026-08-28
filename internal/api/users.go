@@ -2,7 +2,9 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"strconv"
 
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
@@ -54,20 +56,49 @@ func userGet(s *store.Store) gin.HandlerFunc {
 }
 func userMe(s *store.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var in struct {
-			DisplayName string `json:"display_name"`
-		}
-		if c.ShouldBindJSON(&in) != nil {
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
 			httpx.Fail(c, 400, "invalid_request", "Invalid user update.")
 			return
 		}
-		u, _ := CurrentUser(c)
-		if err := s.UpdateDisplayName(c.Request.Context(), u.ID, in.DisplayName); err != nil {
-			httpx.Fail(c, 500, "internal_error", "Could not update user.")
+		var in struct {
+			DisplayName  *string `json:"display_name"`
+			AvatarFileID *string `json:"avatar_file_id"`
+		}
+		if err := json.Unmarshal(body, &in); err != nil {
+			httpx.Fail(c, 400, "invalid_request", "Invalid user update.")
 			return
 		}
-		u.DisplayName = in.DisplayName
-		c.JSON(200, gin.H{"user": publicUser(u)})
+		// avatar_file_id is tri-state (absent / null / a string), so presence in the
+		// raw payload — not just a non-nil pointer — decides whether to touch it at
+		// all: an avatar-only PATCH must not implicitly null out on a name-only one.
+		var raw map[string]json.RawMessage
+		_ = json.Unmarshal(body, &raw)
+		_, avatarProvided := raw["avatar_file_id"]
+
+		u, _ := CurrentUser(c)
+		if in.DisplayName != nil {
+			if err := s.UpdateDisplayName(c.Request.Context(), u.ID, *in.DisplayName); err != nil {
+				httpx.Fail(c, 500, "internal_error", "Could not update user.")
+				return
+			}
+		}
+		if avatarProvided {
+			if err := s.UpdateAvatar(c.Request.Context(), u.ID, in.AvatarFileID); err != nil {
+				if err.Error() == "invalid avatar type" {
+					httpx.Fail(c, 400, "invalid_avatar_type", "Avatar must be PNG, JPEG, GIF, or WebP.")
+					return
+				}
+				httpx.Fail(c, 400, "invalid_avatar", err.Error())
+				return
+			}
+		}
+		updated, err := s.GetUserByID(c.Request.Context(), u.ID)
+		if err != nil {
+			httpx.Fail(c, 500, "internal_error", "Could not get updated user.")
+			return
+		}
+		c.JSON(200, gin.H{"user": publicUser(updated)})
 	}
 }
 func userCreate(s *store.Store) gin.HandlerFunc {

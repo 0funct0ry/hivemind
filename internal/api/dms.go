@@ -19,6 +19,7 @@ func publicDM(c store.ChannelDetails) gin.H {
 			"email":        c.Peer.Email,
 			"display_name": c.Peer.DisplayName,
 			"avatar_color": c.Peer.AvatarColor,
+			"avatar_url":   c.Peer.AvatarURL,
 			"role":         c.Peer.Role,
 			"is_bot":       c.Peer.IsBot,
 			"status":       c.Peer.Status,

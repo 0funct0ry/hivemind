@@ -646,9 +646,10 @@ func (s *Store) HydrateMessages(ctx context.Context, messages []Message) error {
 		}
 
 		query := fmt.Sprintf(`
-			SELECT id, username, email, display_name, password_hash, avatar_color, role, is_bot, status, created_at, updated_at
-			FROM users
-			WHERE id IN (%s)`, strings.Join(placeholders, ","))
+			SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.avatar_color, u.role, u.is_bot, u.status, u.created_at, u.updated_at, f.id, f.name
+			FROM users u
+			LEFT JOIN files f ON f.id = u.avatar_file_id
+			WHERE u.id IN (%s)`, strings.Join(placeholders, ","))
 
 		rows, err := s.reader.QueryContext(ctx, query, userIDs...)
 		if err != nil {
@@ -658,9 +659,15 @@ func (s *Store) HydrateMessages(ctx context.Context, messages []Message) error {
 
 		usersMap := make(map[int64]User)
 		for rows.Next() {
-			u, err := scanUser(rows)
-			if err != nil {
+			var u User
+			var bot int
+			var avatarFileID, avatarFileName sql.NullString
+			if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash, &u.AvatarColor, &u.Role, &bot, &u.Status, &u.CreatedAt, &u.UpdatedAt, &avatarFileID, &avatarFileName); err != nil {
 				return fmt.Errorf("scan user: %w", err)
+			}
+			u.IsBot = bot != 0
+			if avatarFileID.Valid && avatarFileName.Valid {
+				u.AvatarURL = "/api/v1/files/" + avatarFileID.String + "/" + avatarFileName.String
 			}
 			usersMap[u.ID] = u
 		}

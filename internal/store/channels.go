@@ -428,7 +428,11 @@ func (s *Store) CanAccessChannel(ctx context.Context, userID, channelID int64) (
 
 // ListVisibleChannels returns all channels visible to the user.
 // Returns all non-archived public channels + private channels where the user is a member + the user's DM channels.
-func (s *Store) ListVisibleChannels(ctx context.Context, userID int64) ([]ChannelDetails, error) {
+func (s *Store) ListVisibleChannels(ctx context.Context, userID int64, includeArchived ...bool) ([]ChannelDetails, error) {
+	publicClause := "c.kind = 'public' AND c.archived_at IS NULL"
+	if len(includeArchived) > 0 && includeArchived[0] {
+		publicClause = "c.kind = 'public'"
+	}
 	query := `
 		SELECT 
 			c.id, c.kind, c.slug, c.name, c.topic, c.dm_key, c.created_by, c.archived_at, c.last_message_id, c.created_at, c.updated_at,
@@ -437,7 +441,7 @@ func (s *Store) ListVisibleChannels(ctx context.Context, userID int64) ([]Channe
 			CASE WHEN cm.user_id IS NOT NULL THEN 1 ELSE 0 END AS joined
 		FROM channels c
 		LEFT JOIN channel_members cm ON c.id = cm.channel_id AND cm.user_id = ?
-		WHERE (c.kind = 'public' AND c.archived_at IS NULL)
+		WHERE (` + publicClause + `)
 		   OR (c.kind = 'private' AND cm.user_id IS NOT NULL)
 		   OR (c.kind = 'dm' AND cm.user_id IS NOT NULL)
 		ORDER BY 
@@ -472,4 +476,28 @@ func (s *Store) ListVisibleChannels(ctx context.Context, userID int64) ([]Channe
 		list = append(list, det)
 	}
 	return list, rows.Err()
+}
+
+// ListJoinableChannels returns public, non-archived channels the user has not joined.
+func (s *Store) ListJoinableChannels(ctx context.Context, userID int64) ([]ChannelDetails, error) {
+	rows, err := s.reader.QueryContext(ctx, `SELECT c.id,c.kind,c.slug,c.name,c.topic,c.dm_key,c.created_by,c.archived_at,c.last_message_id,c.created_at,c.updated_at,(SELECT COUNT(*) FROM channel_members WHERE channel_id=c.id),0,0 FROM channels c WHERE c.kind='public' AND c.archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM channel_members m WHERE m.channel_id=c.id AND m.user_id=?) ORDER BY c.slug COLLATE NOCASE`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list joinable channels: %w", err)
+	}
+	defer rows.Close()
+	var out []ChannelDetails
+	for rows.Next() {
+		var d ChannelDetails
+		var a, l sql.NullInt64
+		var joined int
+		if err := rows.Scan(&d.ID, &d.Kind, &d.Slug, &d.Name, &d.Topic, &d.DMKey, &d.CreatedBy, &a, &l, &d.CreatedAt, &d.UpdatedAt, &d.MemberCount, &d.LastReadMessageID, &joined); err != nil {
+			return nil, err
+		}
+		d.Joined = false
+		if l.Valid {
+			d.LastMessageID = &l.Int64
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }

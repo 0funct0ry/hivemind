@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 /** Derives up to two initials from a display name/username, matching the mockup's `.av`. */
 function initialsFor(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean)
@@ -12,13 +14,22 @@ export function Avatar({
   size,
   className,
   title,
+  avatarUrl,
 }: {
   name: string
   color: string
   size: number
   className?: string
   title?: string
+  avatarUrl?: string
 }) {
+  const [imgError, setImgError] = useState(false)
+  useEffect(() => {
+    setImgError(false)
+  }, [avatarUrl])
+
+  const showImage = !!avatarUrl && !imgError
+
   return (
     <span
       className={'grid shrink-0 place-items-center font-mono font-semibold text-white ' + (className ?? '')}
@@ -33,7 +44,11 @@ export function Avatar({
       title={title}
       aria-hidden
     >
-      {initialsFor(name)}
+      {showImage ? (
+        <img src={avatarUrl} alt="" className="h-full w-full object-cover" onError={() => setImgError(true)} />
+      ) : (
+        initialsFor(name)
+      )}
     </span>
   )
 }

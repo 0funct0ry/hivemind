@@ -35,6 +35,11 @@ export function Modal({
     toFocus?.focus()
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+        return
+      }
       if (e.key !== 'Tab' || !dialogRef.current) return
       const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
       if (focusable.length === 0) return

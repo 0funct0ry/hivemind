@@ -236,6 +236,73 @@ func TestChannelIDsSerializeAsStrings(t *testing.T) {
 	}
 }
 
+// TestArchiveChannelAuthzMatrix covers the M17.3 archive-lifecycle additions to the M6
+// authorization matrix: only the owner or a workspace admin may archive a channel, archived
+// public channels stay readable but reject new posts and re-joins.
+func TestArchiveChannelAuthzMatrix(t *testing.T) {
+	t.Run("non-owner member cannot archive", func(t *testing.T) {
+		tc := setupTestContext(t)
+		defer tc.close()
+
+		code, resp := tc.request("PATCH", fmt.Sprintf("/api/v1/channels/%d", tc.pubCh.ID), tc.sMember, map[string]any{"archived": true})
+		if code != 403 {
+			t.Fatalf("expected 403 for non-owner archive, got %d. Resp: %s", code, resp)
+		}
+	})
+
+	t.Run("admin archives a channel it doesn't own", func(t *testing.T) {
+		tc := setupTestContext(t)
+		defer tc.close()
+
+		// privCh is owned by uMember; uAdmin is not a member or owner.
+		code, resp := tc.request("PATCH", fmt.Sprintf("/api/v1/channels/%d", tc.privCh.ID), tc.sAdmin, map[string]any{"archived": true})
+		if code != 200 {
+			t.Fatalf("expected 200 for admin archive, got %d. Resp: %s", code, resp)
+		}
+	})
+
+	t.Run("owner archives, member reads but cannot post or rejoin", func(t *testing.T) {
+		tc := setupTestContext(t)
+		defer tc.close()
+
+		// pubCh is owned by uAdmin, and uMember is a member.
+		code, resp := tc.request("PATCH", fmt.Sprintf("/api/v1/channels/%d", tc.pubCh.ID), tc.sAdmin, map[string]any{"archived": true})
+		if code != 200 {
+			t.Fatalf("expected 200 for owner archive, got %d. Resp: %s", code, resp)
+		}
+
+		code, resp = tc.request("GET", fmt.Sprintf("/api/v1/channels/%d", tc.pubCh.ID), tc.sMember, nil)
+		if code != 200 {
+			t.Fatalf("expected member to still read archived channel, got %d. Resp: %s", code, resp)
+		}
+
+		code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sMember, map[string]any{"body": "hello"})
+		if code != 400 {
+			t.Fatalf("expected 400 posting to archived channel, got %d. Resp: %s", code, resp)
+		}
+
+		code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/leave", tc.pubCh.ID), tc.sMember, nil)
+		if code != 204 {
+			t.Fatalf("expected 204 leaving archived channel, got %d. Resp: %s", code, resp)
+		}
+
+		code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/join", tc.pubCh.ID), tc.sMember, nil)
+		if code != 400 {
+			t.Fatalf("expected 400 re-joining archived channel, got %d. Resp: %s", code, resp)
+		}
+	})
+
+	t.Run("archiving a DM is rejected", func(t *testing.T) {
+		tc := setupTestContext(t)
+		defer tc.close()
+
+		code, resp := tc.request("PATCH", fmt.Sprintf("/api/v1/channels/%d", tc.dmCh.ID), tc.sAdmin, map[string]any{"archived": true})
+		if code != 400 {
+			t.Fatalf("expected 400 archiving a DM, got %d. Resp: %s", code, resp)
+		}
+	})
+}
+
 func TestAdminCannotReadDM(t *testing.T) {
 	tc := setupTestContext(t)
 	defer tc.close()

@@ -67,6 +67,7 @@ export function ThreadPanel({ currentUsername }: { currentUsername?: string }) {
                 <Avatar
                   name={data.root.user?.display_name || data.root.user?.username || 'Unknown'}
                   color={data.root.user?.avatar_color ?? '#999'}
+                  avatarUrl={data.root.user?.avatar_url}
                   size={30}
                 />
                 <b className="font-display text-sm font-semibold text-ink">
@@ -100,6 +101,7 @@ export function ThreadPanel({ currentUsername }: { currentUsername?: string }) {
                       <Avatar
                         name={reply.user?.display_name || reply.user?.username || 'Unknown'}
                         color={reply.user?.avatar_color ?? '#999'}
+                        avatarUrl={reply.user?.avatar_url}
                         size={26}
                       />
                     )}

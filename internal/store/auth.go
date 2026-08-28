@@ -10,6 +10,7 @@ import (
 type User struct {
 	ID                                                                    int64
 	Username, Email, DisplayName, PasswordHash, AvatarColor, Role, Status string
+	AvatarURL                                                             string
 	IsBot                                                                 bool
 	CreatedAt, UpdatedAt                                                  int64
 }
@@ -52,7 +53,23 @@ func (s *Store) getUser(ctx context.Context, clause string, args ...any) (User, 
 	if err != nil {
 		return User{}, fmt.Errorf("get user: %w", err)
 	}
+	if err := s.hydrateAvatarURL(ctx, &u); err != nil {
+		return User{}, fmt.Errorf("hydrate user avatar: %w", err)
+	}
 	return u, nil
+}
+
+func (s *Store) hydrateAvatarURL(ctx context.Context, u *User) error {
+	var id, name string
+	err := s.reader.QueryRowContext(ctx, `SELECT id, name FROM files WHERE id = (SELECT avatar_file_id FROM users WHERE id = ?)`, u.ID).Scan(&id, &name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	u.AvatarURL = "/api/v1/files/" + id + "/" + name
+	return nil
 }
 
 // CreateSession persists a new browser session.
@@ -80,6 +97,9 @@ func (s *Store) AuthenticateSession(ctx context.Context, id string, now, ttl int
 		if _, err := s.writer.ExecContext(ctx, "UPDATE sessions SET last_seen_at=?, expires_at=? WHERE id=?", v.LastSeenAt, v.ExpiresAt, id); err != nil {
 			return User{}, Session{}, fmt.Errorf("refresh session: %w", err)
 		}
+	}
+	if err := s.hydrateAvatarURL(ctx, &u); err != nil {
+		return User{}, Session{}, fmt.Errorf("hydrate session user avatar: %w", err)
 	}
 	return u, v, nil
 }
@@ -136,6 +156,9 @@ func (s *Store) AuthenticateAPIToken(ctx context.Context, hash string, now int64
 	u.IsBot = bot != 0
 	if _, err := s.writer.ExecContext(ctx, "UPDATE api_tokens SET last_used_at=? WHERE id=? AND (last_used_at IS NULL OR last_used_at<=?)", now, id, now-60000); err != nil {
 		return User{}, fmt.Errorf("update API token usage: %w", err)
+	}
+	if err := s.hydrateAvatarURL(ctx, &u); err != nil {
+		return User{}, fmt.Errorf("hydrate token user avatar: %w", err)
 	}
 	return u, nil
 }

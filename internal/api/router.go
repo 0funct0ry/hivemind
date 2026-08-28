@@ -392,7 +392,7 @@ func clearCookie(c *gin.Context, cfg config.Config) {
 	http.SetCookie(c.Writer, &http.Cookie{Name: "hm_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: cfg.BehindProxy || cfg.TLS.Cert != "", MaxAge: -1})
 }
 func publicUser(u store.User) gin.H {
-	return gin.H{"id": strconv.FormatInt(u.ID, 10), "username": u.Username, "email": u.Email, "display_name": u.DisplayName, "avatar_color": u.AvatarColor, "role": u.Role, "is_bot": u.IsBot, "status": u.Status}
+	return gin.H{"id": strconv.FormatInt(u.ID, 10), "username": u.Username, "email": u.Email, "display_name": u.DisplayName, "avatar_color": u.AvatarColor, "avatar_url": u.AvatarURL, "role": u.Role, "is_bot": u.IsBot, "status": u.Status, "created_at": u.CreatedAt}
 }
 func clientIP(c *gin.Context, cfg config.Config) string {
 	if cfg.BehindProxy {

@@ -88,7 +88,8 @@ func (s *Store) CleanOrphanFiles(ctx context.Context, cutoffTime int64) ([]strin
 	err := s.Tx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, sha256 FROM files
-			WHERE created_at < ? AND id NOT IN (SELECT file_id FROM attachments)`, cutoffTime)
+			WHERE created_at < ? AND id NOT IN (SELECT file_id FROM attachments)
+			AND id NOT IN (SELECT avatar_file_id FROM users WHERE avatar_file_id IS NOT NULL)`, cutoffTime)
 		if err != nil {
 			return err
 		}

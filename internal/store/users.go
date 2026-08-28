@@ -137,6 +137,33 @@ func (s *Store) UpdateDisplayName(ctx context.Context, id int64, name string) er
 	return nil
 }
 
+// UpdateAvatar sets or clears a user's avatar file after validating the file ownership and type.
+func (s *Store) UpdateAvatar(ctx context.Context, userID int64, fileID *string) error {
+	if fileID != nil {
+		var owner int64
+		var mime string
+		if err := s.reader.QueryRowContext(ctx, "SELECT uploaded_by, mime FROM files WHERE id = ?", *fileID).Scan(&owner, &mime); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("check avatar file: %w", err)
+		}
+		if owner != userID {
+			return fmt.Errorf("avatar file is not owned by user")
+		}
+		switch mime {
+		case "image/png", "image/jpeg", "image/gif", "image/webp":
+		default:
+			return fmt.Errorf("invalid avatar type")
+		}
+	}
+	_, err := s.writer.ExecContext(ctx, "UPDATE users SET avatar_file_id = ?, updated_at = ? WHERE id = ?", fileID, nowMillis(), userID)
+	if err != nil {
+		return fmt.Errorf("update avatar: %w", err)
+	}
+	return nil
+}
+
 // SetPassword replaces a user's password hash.
 func (s *Store) SetPassword(ctx context.Context, id int64, hash string) error {
 	if _, err := s.writer.ExecContext(ctx, "UPDATE users SET password_hash=?,updated_at=? WHERE id=?", hash, nowMillis(), id); err != nil {
