@@ -61,7 +61,8 @@ func (s *Store) UnreadSummary(ctx context.Context, userID int64) ([]UnreadItem, 
 		LEFT JOIN channel_members cm ON c.id = cm.channel_id AND cm.user_id = ?
 		WHERE (c.kind = 'public' AND c.archived_at IS NULL)
 		   OR (c.kind = 'private' AND cm.user_id IS NOT NULL)
-		   OR (c.kind = 'dm' AND cm.user_id IS NOT NULL)`
+		   OR (c.kind = 'dm' AND cm.user_id IS NOT NULL)
+		   OR (c.kind = 'group_dm' AND cm.user_id IS NOT NULL)`
 
 	rows, err := s.reader.QueryContext(ctx, query, userID, userID)
 	if err != nil {

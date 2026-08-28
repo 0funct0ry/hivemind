@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { api, type SearchHit, type DM, type Channel } from '../lib/api'
+import { api, type SearchHit, type Channel } from '../lib/api'
 import { useUiStore } from '../store/ui'
 import { Modal } from './Modal'
 
@@ -107,10 +107,8 @@ export function SearchOverlay() {
   const jumpTo = (hit: SearchHit) => {
     close()
     setPendingJump({ channelId: hit.message.channel_id, messageId: hit.message.id })
-    if (hit.channel.kind === 'dm') {
-      const dms = queryClient.getQueryData<{ data: DM[] }>(['dms'])
-      const dm = dms?.data.find((d) => d.id === hit.channel.id)
-      if (dm) navigate(`/dm/${dm.peer.username}`)
+    if (hit.channel.kind === 'dm' || hit.channel.kind === 'group_dm') {
+      navigate(`/dm/id/${hit.channel.id}`)
       return
     }
     const channels = queryClient.getQueryData<{ data: Channel[] }>(['channels'])

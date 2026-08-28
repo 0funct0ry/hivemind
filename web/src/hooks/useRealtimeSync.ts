@@ -19,6 +19,11 @@ interface TypingPayload {
   expires_at: number
 }
 
+interface PresenceChangedPayload {
+  user_id: string
+  online: boolean
+}
+
 /**
  * Connects the WebSocket client for the lifetime of the app shell and wires
  * server events onto TanStack Query cache invalidation. Messages themselves
@@ -59,6 +64,15 @@ export function useRealtimeSync() {
       const p = payload as TypingPayload
       setTyping(p.channel_id, { userId: p.user_id, name: p.user_id, expiresAt: p.expires_at })
     })
+    const offPresence = wsClient.on('presence.changed', (payload) => {
+      const p = payload as PresenceChangedPayload
+      queryClient.setQueryData<{ online: string[] }>(['presence'], (old) => {
+        const online = new Set(old?.online ?? [])
+        if (p.online) online.add(p.user_id)
+        else online.delete(p.user_id)
+        return { online: Array.from(online) }
+      })
+    })
 
     wsClient.connect()
 
@@ -73,6 +87,7 @@ export function useRealtimeSync() {
       offMemberLeft()
       offMention()
       offTyping()
+      offPresence()
       wsClient.close()
     }
   }, [queryClient, setConnectionState, setTyping])

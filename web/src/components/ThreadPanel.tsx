@@ -6,6 +6,7 @@ import { useUiStore } from '../store/ui'
 import { formatTime } from '../lib/time'
 import { shouldGroup } from '../lib/messageGrouping'
 import { api, type Channel, type DM } from '../lib/api'
+import { dmDisplayName } from '../lib/dm'
 import { Composer } from './Composer'
 import { Avatar } from './Avatar'
 
@@ -18,7 +19,7 @@ function useChannelLabel(channelId: string | undefined): string | null {
   const channel = channelsQuery.data?.data.find((c: Channel) => c.id === channelId)
   if (channel) return `#${channel.slug ?? channel.name}`
   const dm = dmsQuery.data?.data.find((d: DM) => d.id === channelId)
-  if (dm) return `@${dm.peer.username}`
+  if (dm) return dm.kind === 'dm' && dm.peer ? `@${dm.peer.username}` : dmDisplayName(dm)
   return null
 }
 

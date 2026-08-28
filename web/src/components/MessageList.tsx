@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type Attachment, type Message } from '../lib/api'
+import { useNavigate } from 'react-router-dom'
+import { api, type Attachment, type Message, type MessageUser } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
 import { useMessages } from '../hooks/useMessages'
 import { useUiStore } from '../store/ui'
@@ -9,6 +10,7 @@ import { formatTime, formatDay, dayKey, relativeTime } from '../lib/time'
 import { shouldGroup } from '../lib/messageGrouping'
 import { fileTypeAbbrev } from '../lib/fileType'
 import { Avatar } from './Avatar'
+import { PopoverMenu } from './PopoverMenu'
 
 function AttachmentView({ att }: { att: Attachment }) {
   const isImage = att.mime.startsWith('image/')
@@ -98,6 +100,65 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
   )
 }
 
+/** Clicking an avatar or display name opens a small popover — name, bot/role badge, presence,
+ * and a Message button that starts (or reopens) a 1:1 DM with that person. */
+function ProfilePopoverTrigger({ user, children }: { user: MessageUser; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const nav = useNavigate()
+  const queryClient = useQueryClient()
+  const presenceQuery = useQuery({ queryKey: ['presence'], queryFn: api.getPresence })
+  const online = new Set(presenceQuery.data?.online ?? [])
+  const name = user.display_name || user.username
+
+  async function message() {
+    setOpen(false)
+    const r = await api.createDM([user.id])
+    await queryClient.invalidateQueries({ queryKey: ['dms'] })
+    nav(`/dm/id/${r.channel.id}`)
+  }
+
+  return (
+    <span className="relative inline-block">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="rounded">
+        {children}
+      </button>
+      {open && (
+        <PopoverMenu anchorClassName="left-0 top-full mt-1" onClose={() => setOpen(false)}>
+          <div className="min-w-[200px] p-3">
+            <div className="flex items-center gap-2">
+              <Avatar name={name} color={user.avatar_color} avatarUrl={user.avatar_url} size={30} />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-sm font-semibold text-ink">{name}</span>
+                  {user.is_bot && <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>}
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] text-ink-3">
+                  <span
+                    className={
+                      'h-[6px] w-[6px] shrink-0 rounded-full border-[1.5px] ' +
+                      (online.has(user.id) ? 'border-teal bg-teal' : 'border-ink-3 bg-transparent')
+                    }
+                    aria-hidden
+                  />
+                  {online.has(user.id) ? 'Online' : 'Offline'}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={message}
+              className="mt-2 w-full rounded bg-teal px-2 py-1.5 text-sm text-white hover:bg-[#0B564B]"
+            >
+              Message
+            </button>
+          </div>
+        </PopoverMenu>
+      )}
+    </span>
+  )
+}
+
 function MessageRow({
   message,
   grouped,
@@ -123,14 +184,24 @@ function MessageRow({
           <time className="text-[10px] text-ink-3 opacity-0 group-hover:opacity-100">
             {formatTime(message.created_at)}
           </time>
+        ) : message.user ? (
+          <ProfilePopoverTrigger user={message.user}>
+            <Avatar name={name} color={message.user.avatar_color} avatarUrl={message.user.avatar_url} size={30} />
+          </ProfilePopoverTrigger>
         ) : (
-          <Avatar name={name} color={message.user?.avatar_color ?? '#999'} avatarUrl={message.user?.avatar_url} size={30} />
+          <Avatar name={name} color="#999" size={30} />
         )}
       </div>
       <div className={message.status === 'sending' ? 'opacity-60' : ''}>
         {!grouped && (
           <div className="flex items-baseline gap-2">
-            <b className="font-display text-sm font-semibold text-ink">{name}</b>
+            {message.user ? (
+              <ProfilePopoverTrigger user={message.user}>
+                <b className="font-display text-sm font-semibold text-ink">{name}</b>
+              </ProfilePopoverTrigger>
+            ) : (
+              <b className="font-display text-sm font-semibold text-ink">{name}</b>
+            )}
             {message.user?.is_bot && (
               <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>
             )}
@@ -177,6 +248,24 @@ export const MessageList = forwardRef<
   useEffect(() => {
     setUnreadAnchor(channelId, lastReadMessageId)
   }, [channelId, lastReadMessageId, setUnreadAnchor])
+
+  // Mark the channel read whenever it's open and showing its newest loaded message —
+  // on first load and again as new messages arrive live. This is what actually clears
+  // the sidebar's unread badge; the unread divider above is a separate, frozen anchor.
+  const latestMessageId = messages[messages.length - 1]?.id
+  const lastMarkedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!latestMessageId || lastMarkedRef.current === latestMessageId) return
+    lastMarkedRef.current = latestMessageId
+    void api
+      .markRead(channelId, latestMessageId)
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['unreads'] })
+      })
+      .catch(() => {
+        lastMarkedRef.current = null
+      })
+  }, [channelId, latestMessageId, queryClient])
 
   useEffect(() => {
     const el = sentinelRef.current

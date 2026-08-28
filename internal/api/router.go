@@ -119,7 +119,7 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/tokens", tokenList(s))
 	v1.POST("/tokens", tokenCreate(a))
 	v1.DELETE("/tokens/:id", tokenDelete(s))
-	v1.GET("/users", userList(s))
+	v1.GET("/users", userList(s, h))
 	v1.GET("/users/:id", userGet(s))
 	v1.PATCH("/users/me", userMe(s))
 	v1.POST("/users", RequireAdmin(), userCreate(s))
@@ -131,7 +131,7 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.PATCH("/channels/:id", channelUpdate(s))
 	v1.POST("/channels/:id/join", channelJoin(s))
 	v1.POST("/channels/:id/leave", channelLeave(s))
-	v1.GET("/channels/:id/members", channelMembersList(s))
+	v1.GET("/channels/:id/members", channelMembersList(s, h))
 	v1.POST("/channels/:id/members", channelAddMembers(s))
 	v1.DELETE("/channels/:id/members/:uid", channelRemoveMember(s))
 	v1.GET("/channels/:id/activity", channelActivity(s))
@@ -142,8 +142,9 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/messages/:id", messageGet(s))
 	v1.GET("/messages/:id/replies", messageListReplies(s))
 
-	v1.GET("/dms", dmList(s))
-	v1.POST("/dms", dmCreate(s))
+	v1.GET("/dms", dmList(s, h))
+	v1.POST("/dms", dmCreate(s, h))
+	v1.POST("/dms/:id/hide", dmHide(s))
 
 	v1.GET("/search", search(s))
 	v1.GET("/unreads", unreadSummary(s))
@@ -393,6 +394,15 @@ func clearCookie(c *gin.Context, cfg config.Config) {
 }
 func publicUser(u store.User) gin.H {
 	return gin.H{"id": strconv.FormatInt(u.ID, 10), "username": u.Username, "email": u.Email, "display_name": u.DisplayName, "avatar_color": u.AvatarColor, "avatar_url": u.AvatarURL, "role": u.Role, "is_bot": u.IsBot, "status": u.Status, "created_at": u.CreatedAt}
+}
+
+// publicUserOnline is publicUser plus a live "online" flag sourced from the Hub's connection
+// registry — used wherever a user list needs a presence dot (GET /users, DM peers/members,
+// channel member lists).
+func publicUserOnline(u store.User, h *realtime.Hub) gin.H {
+	m := publicUser(u)
+	m["online"] = h.IsOnline(u.ID)
+	return m
 }
 func clientIP(c *gin.Context, cfg config.Config) string {
 	if cfg.BehindProxy {

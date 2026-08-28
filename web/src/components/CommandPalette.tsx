@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, type User } from '../lib/api'
 import { useUiStore } from '../store/ui'
 import { fuzzySearch } from '../lib/fuzzy'
+import { dmDisplayName } from '../lib/dm'
 import { Modal } from './Modal'
 
 const RECENTS_KEY = 'hivemind.recentNav'
@@ -83,14 +84,14 @@ export function CommandPalette() {
   if (!open) return null
 
   const channelItems: PaletteItem[] = (channelsQuery.data?.data ?? [])
-    .filter((c) => c.kind !== 'dm')
+    .filter((c) => c.kind !== 'dm' && c.kind !== 'group_dm')
     .map((c) => ({ type: 'channel', id: c.id, label: `#${c.name}`, path: `/c/${c.slug}` }))
   const dmItems: PaletteItem[] = (dmsQuery.data?.data ?? []).map((d) => ({
     type: 'dm',
     id: d.id,
-    label: d.peer.display_name || d.peer.username,
-    sublabel: `@${d.peer.username}`,
-    path: `/dm/${d.peer.username}`,
+    label: dmDisplayName(d),
+    sublabel: d.kind === 'dm' && d.peer ? `@${d.peer.username}` : `${d.members?.length ?? 0} people`,
+    path: `/dm/id/${d.id}`,
   }))
   const personItems: PaletteItem[] = people.map((u) => ({
     type: 'person',

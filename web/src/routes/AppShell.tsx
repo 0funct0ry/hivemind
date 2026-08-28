@@ -7,6 +7,7 @@ import { ShortcutsHelp } from '../components/ShortcutsHelp'
 import { useAuth } from '../hooks/useAuth'
 import { useRealtimeSync } from '../hooks/useRealtimeSync'
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts'
+import { useUnreadBadge } from '../lib/unreadBadge'
 import { useUiStore } from '../store/ui'
 
 function ConnectionStrip() {
@@ -23,6 +24,7 @@ export function AppShell() {
   const { data, isLoading, isError } = useAuth()
   useRealtimeSync()
   useGlobalShortcuts()
+  useUnreadBadge()
   const openThreadId = useUiStore((s) => s.openThreadId)
 
   if (isLoading) {

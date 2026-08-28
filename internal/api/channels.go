@@ -264,7 +264,7 @@ func channelLeave(s *store.Store) gin.HandlerFunc {
 	}
 }
 
-func channelMembersList(s *store.Store) gin.HandlerFunc {
+func channelMembersList(s *store.Store, h *realtime.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		me, _ := CurrentUser(c)
 		ch, access, ok := resolveChannel(c, s, me.ID)
@@ -282,7 +282,7 @@ func channelMembersList(s *store.Store) gin.HandlerFunc {
 		}
 		data := make([]gin.H, 0, len(members))
 		for _, m := range members {
-			data = append(data, publicUser(m))
+			data = append(data, publicUserOnline(m, h))
 		}
 		c.JSON(200, gin.H{"data": data})
 	}
@@ -425,6 +425,21 @@ func unreadSummary(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 500, "internal_error", "Could not get unread summary.")
 			return
 		}
-		c.JSON(200, gin.H{"data": summary})
+		channels := make([]gin.H, 0, len(summary))
+		var totalUnread, totalMentions int
+		for _, item := range summary {
+			channels = append(channels, gin.H{
+				"channel_id":   strconv.FormatInt(item.ChannelID, 10),
+				"unread_count": item.UnreadCount,
+				"has_mention":  item.MentionCount > 0,
+			})
+			totalUnread += item.UnreadCount
+			totalMentions += item.MentionCount
+		}
+		c.JSON(200, gin.H{
+			"channels":       channels,
+			"total_unread":   totalUnread,
+			"total_mentions": totalMentions,
+		})
 	}
 }

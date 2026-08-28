@@ -30,9 +30,9 @@ function isTypingTarget(e: KeyboardEvent): boolean {
 /** Ordered list of all channels/DMs a user can navigate between with Alt+arrows. */
 function orderedNavItems(channels: Channel[], dms: DM[]): { path: string; id: string }[] {
   const chanItems = channels
-    .filter((c) => c.kind !== 'dm')
+    .filter((c) => c.kind !== 'dm' && c.kind !== 'group_dm')
     .map((c) => ({ path: `/c/${c.slug}`, id: c.id }))
-  const dmItems = dms.map((d) => ({ path: `/dm/${d.peer.username}`, id: d.id }))
+  const dmItems = dms.map((d) => ({ path: `/dm/id/${d.id}`, id: d.id }))
   return [...chanItems, ...dmItems]
 }
 
@@ -99,7 +99,7 @@ export function useGlobalShortcuts() {
 
         let candidates = items
         if (e.shiftKey) {
-          const unreads = queryClient.getQueryData<{ data: UnreadEntry[] }>(['unreads'])?.data ?? []
+          const unreads = queryClient.getQueryData<{ channels: UnreadEntry[] }>(['unreads'])?.channels ?? []
           const unreadIds = new Set(unreads.filter((u) => u.unread_count > 0).map((u) => u.channel_id))
           candidates = items.filter((i) => unreadIds.has(i.id))
           if (candidates.length === 0) return

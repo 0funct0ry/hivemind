@@ -56,3 +56,10 @@ type ReadPayload struct {
 	ChannelID string `json:"channel_id"`
 	MessageID string `json:"message_id"`
 }
+
+// PresencePayload announces a user's online/offline transition to everyone who shares a
+// channel with them.
+type PresencePayload struct {
+	UserID string `json:"user_id"`
+	Online bool   `json:"online"`
+}

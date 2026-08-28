@@ -9,11 +9,12 @@ import (
 
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
 	"github.com/0funct0ry/hivemind/internal/auth"
+	"github.com/0funct0ry/hivemind/internal/realtime"
 	"github.com/0funct0ry/hivemind/internal/store"
 	"github.com/gin-gonic/gin"
 )
 
-func userList(s *store.Store) gin.HandlerFunc {
+func userList(s *store.Store, h *realtime.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		limit, _ := strconv.Atoi(c.Query("limit"))
 		var chID *int64
@@ -30,7 +31,7 @@ func userList(s *store.Store) gin.HandlerFunc {
 		}
 		data := make([]gin.H, 0, len(users))
 		for _, u := range users {
-			data = append(data, publicUser(u))
+			data = append(data, publicUserOnline(u, h))
 		}
 		c.JSON(200, gin.H{"data": data})
 	}

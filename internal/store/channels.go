@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -31,10 +33,11 @@ type Channel struct {
 // ChannelDetails extends Channel with visible info for a specific user.
 type ChannelDetails struct {
 	Channel
-	MemberCount       int   `json:"member_count"`
-	LastReadMessageID int64 `json:"last_read_message_id"`
-	Joined            bool  `json:"joined"`
-	Peer              *User `json:"peer,omitempty"`
+	MemberCount       int    `json:"member_count"`
+	LastReadMessageID int64  `json:"last_read_message_id"`
+	Joined            bool   `json:"joined"`
+	Peer              *User  `json:"peer,omitempty"`
+	Members           []User `json:"members,omitempty"`
 }
 
 // ChannelMember represents a user's membership in a channel.
@@ -168,10 +171,20 @@ func (s *Store) CreateChannel(ctx context.Context, kind, slug, name, topic strin
 }
 
 func dmKeyVal(a, b int64) string {
-	if a <= b {
-		return fmt.Sprintf("%d:%d", a, b)
+	return dmKeyValN([]int64{a, b})
+}
+
+// dmKeyValN computes the dedup key for a DM or group DM: participant ids sorted
+// ascending and joined with ':' (e.g. "3:12:17"). Two ids behave exactly as the
+// original 1:1 dmKeyVal did.
+func dmKeyValN(ids []int64) string {
+	sorted := append([]int64(nil), ids...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	parts := make([]string, len(sorted))
+	for i, id := range sorted {
+		parts[i] = strconv.FormatInt(id, 10)
 	}
-	return fmt.Sprintf("%d:%d", b, a)
+	return strings.Join(parts, ":")
 }
 
 func getChannelTx(ctx context.Context, tx *sql.Tx, id int64) (Channel, error) {
@@ -355,6 +368,31 @@ func (s *Store) ListMembers(ctx context.Context, channelID int64) ([]User, error
 	return users, rows.Err()
 }
 
+// ChannelPeersOf returns the ids of every user who shares at least one channel with userID
+// (userID itself excluded). Used by the realtime hub to resolve the audience for
+// presence.changed events without a second global broadcast path.
+func (s *Store) ChannelPeersOf(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := s.reader.QueryContext(ctx, `
+		SELECT DISTINCT cm2.user_id
+		FROM channel_members cm1
+		JOIN channel_members cm2 ON cm2.channel_id = cm1.channel_id
+		WHERE cm1.user_id = ? AND cm2.user_id != ?`, userID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("channel peers of: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // IsMember checks if a user is a member of a channel.
 func (s *Store) IsMember(ctx context.Context, channelID, userID int64) (bool, error) {
 	var exists int
@@ -444,8 +482,9 @@ func (s *Store) ListVisibleChannels(ctx context.Context, userID int64, includeAr
 		WHERE (` + publicClause + `)
 		   OR (c.kind = 'private' AND cm.user_id IS NOT NULL)
 		   OR (c.kind = 'dm' AND cm.user_id IS NOT NULL)
-		ORDER BY 
-			CASE WHEN c.kind = 'dm' THEN 1 ELSE 0 END, 
+		   OR (c.kind = 'group_dm' AND cm.user_id IS NOT NULL)
+		ORDER BY
+			CASE WHEN c.kind IN ('dm', 'group_dm') THEN 1 ELSE 0 END,
 			COALESCE(c.slug, c.name) COLLATE NOCASE`
 
 	rows, err := s.reader.QueryContext(ctx, query, userID)

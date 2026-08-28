@@ -33,28 +33,43 @@ type Publisher interface {
 	Publish(ev Event)
 }
 
+// defaultPresenceDebounce is how long the hub waits after a user's connection count crosses
+// the 0/1 boundary before announcing the transition, so a reconnect storm doesn't flap the
+// dot.
+const defaultPresenceDebounce = 10 * time.Second
+
 // Hub manages active WebSocket connections and channels.
 type Hub struct {
-	store      *store.Store
-	inbox      chan Event
-	register   chan *Conn
-	unregister chan *Conn
-	commands   chan Command
-	conns      map[int64][]*Conn            // UserID -> Connections
-	members    map[int64]map[int64]struct{} // ChannelID -> UserID Set
-	mu         sync.RWMutex
+	store *store.Store
+	inbox chan Event
+
+	// PresenceDebounce is how long the hub waits after a user's connection count crosses
+	// the 0/1 boundary before announcing the transition. A field (not a package-level var)
+	// so each Hub instance — and each test's Hub — can be tuned independently without a
+	// cross-goroutine, cross-test data race on shared state.
+	PresenceDebounce time.Duration
+
+	register       chan *Conn
+	unregister     chan *Conn
+	commands       chan Command
+	conns          map[int64][]*Conn            // UserID -> Connections
+	members        map[int64]map[int64]struct{} // ChannelID -> UserID Set
+	presenceTimers map[int64]*time.Timer        // UserID -> pending presence.changed debounce
+	mu             sync.RWMutex
 }
 
 // NewHub creates a new Hub.
 func NewHub(s *store.Store) *Hub {
 	return &Hub{
-		store:      s,
-		inbox:      make(chan Event, 4096),
-		register:   make(chan *Conn),
-		unregister: make(chan *Conn),
-		commands:   make(chan Command, 1024),
-		conns:      make(map[int64][]*Conn),
-		members:    make(map[int64]map[int64]struct{}),
+		store:            s,
+		inbox:            make(chan Event, 4096),
+		PresenceDebounce: defaultPresenceDebounce,
+		register:         make(chan *Conn),
+		unregister:       make(chan *Conn),
+		commands:         make(chan Command, 1024),
+		conns:            make(map[int64][]*Conn),
+		members:          make(map[int64]map[int64]struct{}),
+		presenceTimers:   make(map[int64]*time.Timer),
 	}
 }
 
@@ -92,6 +107,9 @@ func (h *Hub) Run(ctx context.Context) {
 				}
 			}
 			h.mu.Unlock()
+			for _, t := range h.presenceTimers {
+				t.Stop()
+			}
 			return
 		}
 	}
@@ -100,6 +118,7 @@ func (h *Hub) Run(ctx context.Context) {
 func (h *Hub) handleRegister(ctx context.Context, conn *Conn) {
 	h.mu.Lock()
 	userConns := h.conns[conn.User.ID]
+	wasOffline := len(userConns) == 0
 
 	// Enforce 8 concurrent connections per user (close oldest)
 	if len(userConns) >= 8 {
@@ -110,6 +129,10 @@ func (h *Hub) handleRegister(ctx context.Context, conn *Conn) {
 
 	h.conns[conn.User.ID] = append(userConns, conn)
 	h.mu.Unlock()
+
+	if wasOffline {
+		h.schedulePresenceAnnounce(conn.User.ID)
+	}
 
 	// Fetch visible channels for the hello payload
 	channels, err := h.store.ListVisibleChannels(ctx, conn.User.ID)
@@ -160,8 +183,6 @@ func (h *Hub) handleRegister(ctx context.Context, conn *Conn) {
 
 func (h *Hub) handleUnregister(conn *Conn) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	userConns := h.conns[conn.User.ID]
 	for i, c := range userConns {
 		if c == conn {
@@ -169,12 +190,36 @@ func (h *Hub) handleUnregister(conn *Conn) {
 			break
 		}
 	}
-	if len(h.conns[conn.User.ID]) == 0 {
+	wentOffline := len(h.conns[conn.User.ID]) == 0
+	if wentOffline {
 		delete(h.conns, conn.User.ID)
+	}
+	h.mu.Unlock()
+
+	if wentOffline {
+		h.schedulePresenceAnnounce(conn.User.ID)
 	}
 }
 
+// schedulePresenceAnnounce (de)bounces a presence.changed announcement for userID: it must
+// only be called from the Hub's own goroutine (handleRegister/handleUnregister), since it
+// mutates presenceTimers without a lock — the timer's own fire callback only calls Publish,
+// which is a plain channel send and safe from any goroutine.
+func (h *Hub) schedulePresenceAnnounce(userID int64) {
+	if t, ok := h.presenceTimers[userID]; ok {
+		t.Stop()
+	}
+	h.presenceTimers[userID] = time.AfterFunc(h.PresenceDebounce, func() {
+		h.Publish(Event{Type: "presence.changed", UserID: userID})
+	})
+}
+
 func (h *Hub) handlePublish(ctx context.Context, ev Event) {
+	if ev.Type == "presence.changed" {
+		h.publishPresence(ctx, ev.UserID)
+		return
+	}
+
 	// Invalidate membership cache on member changes or channel archive/deletes
 	if ev.Type == "member.joined" || ev.Type == "member.left" || ev.Type == "channel.created" || ev.Type == "channel.updated" {
 		h.mu.Lock()
@@ -240,6 +285,42 @@ func (h *Hub) handlePublish(ctx context.Context, ev Event) {
 				continue
 			}
 			conn.Send(frame)
+		}
+	}
+}
+
+// publishPresence fans out a presence.changed event for userID to every user who shares at
+// least one channel with them — reusing the membership audience the rest of the hub relies
+// on (via the store, since this crosses more channels than the members cache lazily holds),
+// not a second global broadcast path.
+func (h *Hub) publishPresence(ctx context.Context, userID int64) {
+	h.mu.RLock()
+	online := len(h.conns[userID]) > 0
+	h.mu.RUnlock()
+
+	payloadBytes, err := json.Marshal(PresencePayload{
+		UserID: strconv.FormatInt(userID, 10),
+		Online: online,
+	})
+	if err != nil {
+		slog.Error("failed to marshal presence payload", "user_id", userID, "error", err)
+		return
+	}
+	frame := Frame{V: 1, Type: "presence.changed", TS: time.Now().UnixMilli(), Payload: payloadBytes}
+
+	peers, err := h.store.ChannelPeersOf(ctx, userID)
+	if err != nil {
+		slog.Error("failed to resolve presence audience", "user_id", userID, "error", err)
+		return
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, peerID := range peers {
+		if conns, ok := h.conns[peerID]; ok {
+			for _, conn := range conns {
+				conn.Send(frame)
+			}
 		}
 	}
 }

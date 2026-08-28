@@ -20,11 +20,12 @@ export interface User {
   is_bot: boolean
   status: string
   created_at?: number
+  online?: boolean
 }
 
 export interface Channel {
   id: string
-  kind: 'public' | 'private' | 'dm'
+  kind: 'public' | 'private' | 'dm' | 'group_dm'
   slug: string | null
   name: string
   topic: string
@@ -36,8 +37,10 @@ export interface Channel {
 
 export interface DM {
   id: string
-  kind: 'dm'
-  peer: User
+  kind: 'dm' | 'group_dm'
+  name?: string
+  peer?: User
+  members?: User[]
   last_message_id: string | null
   last_read_message_id: string | null
 }
@@ -45,10 +48,13 @@ export interface DM {
 export interface UnreadEntry {
   channel_id: string
   unread_count: number
-  mention_count: number
-  last_message_id: string | null
-  last_read_message_id: string | null
-  joined: boolean
+  has_mention: boolean
+}
+
+export interface UnreadsResponse {
+  channels: UnreadEntry[]
+  total_unread: number
+  total_mentions: number
 }
 
 export interface MessageUser {
@@ -104,7 +110,7 @@ export interface ActivityResponse {
 
 export interface SearchChannel {
   id: string
-  kind: 'public' | 'private' | 'dm'
+  kind: 'public' | 'private' | 'dm' | 'group_dm'
   slug: string | null
   name: string
   topic: string
@@ -175,7 +181,9 @@ export const api = {
   leaveChannel: (id: string) => request<void>(`/channels/${id}/leave`, { method: 'POST' }),
   updateMe: (patch: { display_name?: string; avatar_file_id?: string | null }) => request<{ user: User }>('/users/me', { method: 'PATCH', body: JSON.stringify(patch) }),
   listDMs: () => request<{ data: DM[] }>('/dms'),
-  unreadSummary: () => request<{ data: UnreadEntry[] }>('/unreads'),
+  recentDMs: () => request<{ data: User[] }>('/dms?recent=1'),
+  hideDM: (channelId: string) => request<void>(`/dms/${channelId}/hide`, { method: 'POST' }),
+  unreadSummary: () => request<UnreadsResponse>('/unreads'),
   getUser: (id: string) => request<{ user: User }>(`/users/${id}`),
   listUsers: (params: { q?: string; channelId?: string; limit?: number } = {}) => {
     const qs = new URLSearchParams()
@@ -184,8 +192,8 @@ export const api = {
     if (params.limit) qs.set('limit', String(params.limit))
     return request<{ data: User[] }>(`/users?${qs.toString()}`)
   },
-  createDM: (userId: string) =>
-    request<{ channel: DM }>('/dms', { method: 'POST', body: JSON.stringify({ user_id: userId }) }),
+  createDM: (userIds: string[]) =>
+    request<{ channel: DM }>('/dms', { method: 'POST', body: JSON.stringify({ user_ids: userIds }) }),
   listChannelMembers: (channelId: string) => request<{ data: User[] }>(`/channels/${channelId}/members`),
   getPresence: () => request<{ online: string[] }>('/presence'),
 

@@ -114,43 +114,43 @@ func TestUnreadsAndMarkReadAPI(t *testing.T) {
 	}
 
 	var resp struct {
-		Data []struct {
-			ChannelID    int64 `json:"channel_id"`
-			UnreadCount  int   `json:"unread_count"`
-			MentionCount int   `json:"mention_count"`
-			Joined       bool  `json:"joined"`
-		} `json:"data"`
+		Channels []struct {
+			ChannelID   string `json:"channel_id"`
+			UnreadCount int    `json:"unread_count"`
+			HasMention  bool   `json:"has_mention"`
+		} `json:"channels"`
+		TotalUnread   int `json:"total_unread"`
+		TotalMentions int `json:"total_mentions"`
 	}
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatal(err)
 	}
 
 	// We expect 3 channels: general (auto-seeded, joined by both), pub-unread (public, visible, not joined by u2), priv-unread (private, joined by both)
-	if len(resp.Data) != 3 {
-		t.Fatalf("expected 3 channels in unread summary, got %d: %+v", len(resp.Data), resp.Data)
+	if len(resp.Channels) != 3 {
+		t.Fatalf("expected 3 channels in unread summary, got %d: %+v", len(resp.Channels), resp.Channels)
 	}
+	privChID := strconv.FormatInt(tc.privCh.ID, 10)
+	pubChID := strconv.FormatInt(tc.pubCh.ID, 10)
 
 	var foundPriv bool
-	for _, item := range resp.Data {
-		if item.ChannelID == tc.privCh.ID {
+	for _, item := range resp.Channels {
+		if item.ChannelID == privChID {
 			foundPriv = true
 			if item.UnreadCount != 1 {
 				t.Errorf("expected 1 unread in private channel, got %d", item.UnreadCount)
 			}
-			if !item.Joined {
-				t.Error("expected joined=true for private channel")
-			}
-		} else if item.ChannelID == tc.pubCh.ID {
+		} else if item.ChannelID == pubChID {
 			if item.UnreadCount != 0 {
 				t.Errorf("expected 0 unreads for unjoined public channel, got %d", item.UnreadCount)
-			}
-			if item.Joined {
-				t.Error("expected joined=false for unjoined public channel")
 			}
 		}
 	}
 	if !foundPriv {
 		t.Error("did not find private channel in unreads")
+	}
+	if resp.TotalUnread != 1 {
+		t.Errorf("expected total_unread=1, got %d", resp.TotalUnread)
 	}
 
 	// 3. Mark read for u2
@@ -171,8 +171,8 @@ func TestUnreadsAndMarkReadAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, item := range resp.Data {
-		if item.ChannelID == tc.privCh.ID {
+	for _, item := range resp.Channels {
+		if item.ChannelID == privChID {
 			if item.UnreadCount != 0 {
 				t.Errorf("expected 0 unread in private channel after marking read, got %d", item.UnreadCount)
 			}

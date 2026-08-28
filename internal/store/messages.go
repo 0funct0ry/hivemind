@@ -250,6 +250,18 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 			return fmt.Errorf("update channel metadata: %w", err)
 		}
 
+		// A DM/group DM that any member removed from their sidebar (HideConversation)
+		// reappears for everyone the moment new activity arrives.
+		if kind == "dm" || kind == "group_dm" {
+			_, err = tx.ExecContext(ctx, `
+				UPDATE channel_members SET hidden_at = NULL
+				WHERE channel_id = ? AND hidden_at IS NOT NULL`,
+				in.ChannelID)
+			if err != nil {
+				return fmt.Errorf("unhide conversation: %w", err)
+			}
+		}
+
 		// Resolve mentions
 		resolved := make(map[int64]string)
 		var largeChannelID int64

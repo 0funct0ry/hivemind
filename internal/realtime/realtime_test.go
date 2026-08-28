@@ -477,3 +477,119 @@ func TestPresenceAPI(t *testing.T) {
 		t.Fatalf("expected u1 offline after disconnecting, got %v", online)
 	}
 }
+
+func TestPresenceChangedEvent(t *testing.T) {
+	api.DisableRateLimits = true
+	defer func() { api.DisableRateLimits = false }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	a := auth.New(s, 24*time.Hour)
+	cfg := config.Config{WorkspaceName: "Test Workspace"}
+	r := api.NewRouter(s, a, cfg)
+	// This Hub instance's own debounce, not a shared package var — avoids racing with
+	// other tests' long-lived (never-cancelled-by-ctx) hub goroutines.
+	api.TestHub.PresenceDebounce = 50 * time.Millisecond
+
+	u1, _ := s.CreateUser(ctx, store.UserInput{Username: "presthree", Email: "p3@example.com", PasswordHash: "hash"})
+	u2, _ := s.CreateUser(ctx, store.UserInput{Username: "presfour", Email: "p4@example.com", PasswordHash: "hash"})
+	s1, _ := a.CreateSession(ctx, u1.ID, "UA", "127.0.0.1")
+	s2, _ := a.CreateSession(ctx, u2.ID, "UA", "127.0.0.1")
+
+	// u1 and u2 share a channel, so u2 is in u1's presence audience.
+	if _, err := s.CreateChannel(ctx, "private", "pres-chan", "Pres Channel", "", u1.ID, []int64{u1.ID, u2.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/ws"
+
+	dialWS := func(sessionID string) *websocket.Conn {
+		headers := http.Header{}
+		headers.Set("Cookie", "hm_session="+sessionID)
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
+		if err != nil {
+			t.Fatalf("failed to dial websocket: %v", err)
+		}
+		return conn
+	}
+
+	// u2 observes presence.changed events for u1. gorilla/websocket connections are
+	// unusable after any read error (including a deadline timeout) — one background
+	// reader feeding a channel avoids ever calling ReadJSON directly against a deadline.
+	ws2 := dialWS(s2)
+	defer ws2.Close()
+	var f2 realtime.Frame
+	_ = ws2.ReadJSON(&f2) // hello
+
+	presenceEvents := make(chan realtime.PresencePayload, 16)
+	go func() {
+		for {
+			var frame realtime.Frame
+			if err := ws2.ReadJSON(&frame); err != nil {
+				return
+			}
+			if frame.Type != "presence.changed" {
+				continue
+			}
+			var p realtime.PresencePayload
+			_ = json.Unmarshal(frame.Payload, &p)
+			presenceEvents <- p
+		}
+	}()
+
+	awaitPresence := func(timeout time.Duration) (realtime.PresencePayload, bool) {
+		select {
+		case p := <-presenceEvents:
+			return p, true
+		case <-time.After(timeout):
+			return realtime.PresencePayload{}, false
+		}
+	}
+
+	// u1 opens two connections; only the 0->1 transition should announce, debounced.
+	ws1a := dialWS(s1)
+	defer ws1a.Close()
+	var f1a realtime.Frame
+	_ = ws1a.ReadJSON(&f1a) // hello
+
+	ws1b := dialWS(s1)
+	defer ws1b.Close()
+	var f1b realtime.Frame
+	_ = ws1b.ReadJSON(&f1b) // hello
+
+	p, ok := awaitPresence(2 * time.Second)
+	if !ok {
+		t.Fatal("expected a presence.changed event for u1 coming online")
+	}
+	if p.UserID != strconv.FormatInt(u1.ID, 10) || !p.Online {
+		t.Fatalf("expected {user_id:%d, online:true}, got %+v", u1.ID, p)
+	}
+
+	// Closing one of two connections must not announce offline yet.
+	ws1a.Close()
+	if _, ok := awaitPresence(200 * time.Millisecond); ok {
+		t.Fatal("did not expect a presence.changed event while u1 still has an open connection")
+	}
+
+	// Closing the last connection announces offline.
+	ws1b.Close()
+	p, ok = awaitPresence(2 * time.Second)
+	if !ok {
+		t.Fatal("expected a presence.changed event for u1 going offline")
+	}
+	if p.UserID != strconv.FormatInt(u1.ID, 10) || p.Online {
+		t.Fatalf("expected {user_id:%d, online:false}, got %+v", u1.ID, p)
+	}
+}

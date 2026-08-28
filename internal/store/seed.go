@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
-	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -19,50 +18,101 @@ const seedBcryptCost = 12
 // seedUsers lists the realistic fixture identities used by Seed, in order. The
 // first entry is always seeded as the admin user.
 var seedUsers = []struct {
-	username string
-	email    string
+	username    string
+	email       string
+	displayName string
 }{
-	{"bruce", "bruce@hivemind.com"},
-	{"oliver", "oliver@hivemind.com"},
-	{"hugo", "hugo@hivemind.com"},
-	{"felix", "felix@hivemind.com"},
-	{"arthur", "arthur@hivemind.com"},
-	{"leo", "leo@hivemind.com"},
-	{"oscar", "oscar@hivemind.com"},
-	{"louis", "louis@hivemind.com"},
-	{"edgar", "edgar@hivemind.com"},
-	{"henry", "henry@hivemind.com"},
-	{"alain", "alain@hivemind.com"},
-	{"emil", "emil@hivemind.com"},
-	{"otto", "otto@hivemind.com"},
-	{"hans", "hans@hivemind.com"},
-	{"erik", "erik@hivemind.com"},
-	{"niels", "niels@hivemind.com"},
-	{"lars", "lars@hivemind.com"},
-	{"ivan", "ivan@hivemind.com"},
-	{"marc", "marc@hivemind.com"},
-	{"pierre", "pierre@hivemind.com"},
-	{"clara", "clara@hivemind.com"},
-	{"elise", "elise@hivemind.com"},
-	{"sophie", "sophie@hivemind.com"},
-	{"anna", "anna@hivemind.com"},
-	{"emma", "emma@hivemind.com"},
-	{"ines", "ines@hivemind.com"},
-	{"lena", "lena@hivemind.com"},
-	{"sara", "sara@hivemind.com"},
-	{"mila", "mila@hivemind.com"},
-	{"nina", "nina@hivemind.com"},
-	{"eva", "eva@hivemind.com"},
-	// NB: the source list repeats "clara" (#21 and #32) — skipped here since
-	// usernames must be unique.
-	{"freya", "freya@hivemind.com"},
-	{"iris", "iris@hivemind.com"},
-	{"alice", "alice@hivemind.com"},
-	{"greta", "greta@hivemind.com"},
-	{"elsa", "elsa@hivemind.com"},
-	{"helga", "helga@hivemind.com"},
-	{"astrid", "astrid@hivemind.com"},
-	{"maja", "maja@hivemind.com"},
+	{"bruce", "bruce@hivemind.com", "Bruce Wayne"},
+	{"oliver", "oliver@hivemind.com", "Oliver Queen"},
+	{"hugo", "hugo@hivemind.com", "Hugo Martin"},
+	{"felix", "felix@hivemind.com", "Felix Anderson"},
+	{"arthur", "arthur@hivemind.com", "Arthur Morgan"},
+	{"leo", "leo@hivemind.com", "Leo Bennett"},
+	{"oscar", "oscar@hivemind.com", "Oscar Mitchell"},
+	{"louis", "louis@hivemind.com", "Louis Laurent"},
+	{"edgar", "edgar@hivemind.com", "Edgar Wilson"},
+	{"henry", "henry@hivemind.com", "Henry Cooper"},
+	{"alain", "alain@hivemind.com", "Alain Dubois"},
+	{"emil", "emil@hivemind.com", "Emil Fischer"},
+	{"otto", "otto@hivemind.com", "Otto Schneider"},
+	{"hans", "hans@hivemind.com", "Hans Mueller"},
+	{"erik", "erik@hivemind.com", "Erik Johansson"},
+	{"niels", "niels@hivemind.com", "Niels Hansen"},
+	{"lars", "lars@hivemind.com", "Lars Nielsen"},
+	{"ivan", "ivan@hivemind.com", "Ivan Petrov"},
+	{"marc", "marc@hivemind.com", "Marc Laurent"},
+	{"pierre", "pierre@hivemind.com", "Pierre Moreau"},
+	{"clara", "clara@hivemind.com", "Clara Bennett"},
+	{"elise", "elise@hivemind.com", "Elise Martin"},
+	{"sophie", "sophie@hivemind.com", "Sophie Laurent"},
+	{"anna", "anna@hivemind.com", "Anna Schmidt"},
+	{"emma", "emma@hivemind.com", "Emma Richardson"},
+	{"ines", "ines@hivemind.com", "Ines Garcia"},
+	{"lena", "lena@hivemind.com", "Lena Hoffmann"},
+	{"sara", "sara@hivemind.com", "Sara Johnson"},
+	{"mila", "mila@hivemind.com", "Mila Novak"},
+	{"nina", "nina@hivemind.com", "Nina Rossi"},
+	{"eva", "eva@hivemind.com", "Eva Andersson"},
+	{"freya", "freya@hivemind.com", "Freya Thompson"},
+	{"iris", "iris@hivemind.com", "Iris Walker"},
+	{"alice", "alice@hivemind.com", "Alice Morgan"},
+	{"greta", "greta@hivemind.com", "Greta Bauer"},
+	{"elsa", "elsa@hivemind.com", "Elsa Lindberg"},
+	{"helga", "helga@hivemind.com", "Helga Weber"},
+	{"astrid", "astrid@hivemind.com", "Astrid Olsen"},
+	{"maja", "maja@hivemind.com", "Maja Eriksson"},
+
+	// Additional users
+	{"liam", "liam@hivemind.com", "Liam Carter"},
+	{"noah", "noah@hivemind.com", "Noah Williams"},
+	{"ethan", "ethan@hivemind.com", "Ethan Parker"},
+	{"james", "james@hivemind.com", "James Anderson"},
+	{"charles", "charles@hivemind.com", "Charles Bennett"},
+	{"george", "george@hivemind.com", "George Harrison"},
+	{"thomas", "thomas@hivemind.com", "Thomas Brooks"},
+	{"william", "william@hivemind.com", "William Turner"},
+	{"jack", "jack@hivemind.com", "Jack Robinson"},
+	{"daniel", "daniel@hivemind.com", "Daniel Foster"},
+	{"samuel", "samuel@hivemind.com", "Samuel Collins"},
+	{"benjamin", "benjamin@hivemind.com", "Benjamin Clark"},
+	{"alexander", "alexander@hivemind.com", "Alexander Wright"},
+	{"theodore", "theodore@hivemind.com", "Theodore Harris"},
+	{"sebastian", "sebastian@hivemind.com", "Sebastian Brooks"},
+	{"julian", "julian@hivemind.com", "Julian Reed"},
+	{"max", "max@hivemind.com", "Maxwell Turner"},
+	{"arthur2", "arthur2@hivemind.com", "Arthur Collins"},
+	{"frederick", "frederick@hivemind.com", "Frederick Moore"},
+	{"edward", "edward@hivemind.com", "Edward Davis"},
+	{"charlotte", "charlotte@hivemind.com", "Charlotte Evans"},
+	{"amelia", "amelia@hivemind.com", "Amelia Wilson"},
+	{"olivia", "olivia@hivemind.com", "Olivia Taylor"},
+	{"isabella", "isabella@hivemind.com", "Isabella Rossi"},
+	{"mia", "mia@hivemind.com", "Mia Thompson"},
+	{"ava", "ava@hivemind.com", "Ava Mitchell"},
+	{"sophia", "sophia@hivemind.com", "Sophia Clark"},
+	{"isla", "isla@hivemind.com", "Isla Campbell"},
+	{"amelie", "amelie@hivemind.com", "Amelie Bernard"},
+	{"camille", "camille@hivemind.com", "Camille Moreau"},
+	{"juliette", "juliette@hivemind.com", "Juliette Laurent"},
+	{"margot", "margot@hivemind.com", "Margot Dubois"},
+	{"celine", "celine@hivemind.com", "Celine Martin"},
+	{"laura", "laura@hivemind.com", "Laura Schneider"},
+	{"marta", "marta@hivemind.com", "Marta Rossi"},
+	{"elena", "elena@hivemind.com", "Elena Garcia"},
+	{"victoria", "victoria@hivemind.com", "Victoria Hughes"},
+	{"zoe", "zoe@hivemind.com", "Zoe Richardson"},
+	{"chloe", "chloe@hivemind.com", "Chloe Bennett"},
+	{"ruby", "ruby@hivemind.com", "Ruby Wilson"},
+	{"layla", "layla@hivemind.com", "Layla Foster"},
+	{"lucy", "lucy@hivemind.com", "Lucy Anderson"},
+	{"grace", "grace@hivemind.com", "Grace Mitchell"},
+	{"lily", "lily@hivemind.com", "Lily Parker"},
+	{"hannah", "hannah@hivemind.com", "Hannah Cooper"},
+	{"megan", "megan@hivemind.com", "Megan Wright"},
+	{"rachel", "rachel@hivemind.com", "Rachel Morgan"},
+	{"victor", "victor@hivemind.com", "Victor Petrov"},
+	{"marco", "marco@hivemind.com", "Marco Bianchi"},
+	{"andreas", "andreas@hivemind.com", "Andreas Keller"},
 }
 
 // DefaultSeedPassword is applied to every seeded user when the caller does
@@ -446,8 +496,12 @@ var sampleBodies = []string{
 
 // Seed populates the database with realistic test data. Every seeded user
 // gets password as their login password (all users share the same password
-// since this is fixture data, not a real deployment).
-func (s *Store) Seed(ctx context.Context, numUsers, numChannels, numMessages int, password string) error {
+// since this is fixture data, not a real deployment). unjoinedChannels is the
+// count of the seeded public channels (taken from the end of the generated
+// list) that are created with no channel_members rows at all — not even the
+// creator — so the Browse Channels / Join flow has something real to exercise
+// instead of every seeded user already belonging to every channel.
+func (s *Store) Seed(ctx context.Context, numUsers, numChannels, numMessages, unjoinedChannels int, password string) error {
 	if numUsers < 1 {
 		numUsers = 1
 	}
@@ -462,6 +516,12 @@ func (s *Store) Seed(ctx context.Context, numUsers, numChannels, numMessages int
 	}
 	if numMessages < 1 {
 		numMessages = 1
+	}
+	if unjoinedChannels < 0 {
+		unjoinedChannels = 0
+	}
+	if unjoinedChannels > numChannels {
+		unjoinedChannels = numChannels
 	}
 	if password == "" {
 		password = DefaultSeedPassword
@@ -486,7 +546,7 @@ func (s *Store) Seed(ctx context.Context, numUsers, numChannels, numMessages int
 		for i := 0; i < numUsers; i++ {
 			username := seedUsers[i].username
 			email := seedUsers[i].email
-			displayName := strings.ToUpper(username[:1]) + username[1:]
+			displayName := seedUsers[i].displayName
 			role := "member"
 			if i == 0 {
 				role = "admin"
@@ -507,24 +567,43 @@ func (s *Store) Seed(ctx context.Context, numUsers, numChannels, numMessages int
 			userIDs = append(userIDs, uid)
 		}
 
-		// 2. Generate channels, drawing distinct names from the channelNames pool
+		// 2. Generate channels, drawing distinct names from the channelNames pool. The
+		// last unjoinedChannels of them are created with created_by left unset and no
+		// channel_members rows at all, so they're visible (public, per
+		// ListVisibleChannels) but joined by nobody — realistic fodder for the Browse
+		// Channels / Join flow instead of every seeded user already belonging to
+		// every channel.
 		channelOrder := rng.Perm(len(channelNames))
-		var channelIDs []int64
+		var joinedChannelIDs []int64
+		firstUnjoinedIdx := numChannels - unjoinedChannels
 		for i := 0; i < numChannels; i++ {
 			slug := channelNames[channelOrder[i]]
 			name := slug
 			topic := fmt.Sprintf("Discussion topic for #%s", slug)
 			now := time.Now().UnixMilli()
+			unjoined := i >= firstUnjoinedIdx
 
-			res, err := tx.ExecContext(ctx, `
-				INSERT INTO channels (kind, slug, name, topic, created_by, created_at, updated_at)
-				VALUES ('public', ?, ?, ?, ?, ?, ?)`,
-				slug, name, topic, userIDs[0], now, now)
+			var res sql.Result
+			var err error
+			if unjoined {
+				res, err = tx.ExecContext(ctx, `
+					INSERT INTO channels (kind, slug, name, topic, created_at, updated_at)
+					VALUES ('public', ?, ?, ?, ?, ?)`,
+					slug, name, topic, now, now)
+			} else {
+				res, err = tx.ExecContext(ctx, `
+					INSERT INTO channels (kind, slug, name, topic, created_by, created_at, updated_at)
+					VALUES ('public', ?, ?, ?, ?, ?, ?)`,
+					slug, name, topic, userIDs[0], now, now)
+			}
 			if err != nil {
 				return fmt.Errorf("seed channel %s: %w", slug, err)
 			}
 			cid, _ := res.LastInsertId()
-			channelIDs = append(channelIDs, cid)
+			if unjoined {
+				continue
+			}
+			joinedChannelIDs = append(joinedChannelIDs, cid)
 
 			// Join all users to all public channels
 			for _, uid := range userIDs {
@@ -572,9 +651,10 @@ func (s *Store) Seed(ctx context.Context, numUsers, numChannels, numMessages int
 			return timestamps[i] < timestamps[j]
 		})
 
-		// 4. Insert messages
-		for i := 0; i < numMessages; i++ {
-			cid := channelIDs[rng.Intn(len(channelIDs))]
+		// 4. Insert messages — only into channels that actually have members, so a
+		// message's author is always someone who could plausibly have posted it.
+		for i := 0; i < numMessages && len(joinedChannelIDs) > 0; i++ {
+			cid := joinedChannelIDs[rng.Intn(len(joinedChannelIDs))]
 			uid := userIDs[rng.Intn(len(userIDs))]
 			body := sampleBodies[rng.Intn(len(sampleBodies))]
 			ts := timestamps[i]

@@ -6,7 +6,7 @@ import { Composer } from '../components/Composer'
 import { PulseRuler } from '../components/PulseRuler'
 import { TypingIndicator } from '../components/TypingIndicator'
 import { useAuth } from '../hooks/useAuth'
-import { useChannelBySlug, useDmByUsername } from '../hooks/useResolvedChannel'
+import { useChannelBySlug, useDmByUsername, useDmById } from '../hooks/useResolvedChannel'
 import { useUiStore } from '../store/ui'
 import { api } from '../lib/api'
 import { Avatar } from '../components/Avatar'
@@ -89,12 +89,12 @@ function ChannelHeader({
   )
 }
 
-function DmHeader({ name }: { name: string }) {
+function DmHeader({ name, isGroup, memberCount }: { name: string; isGroup?: boolean; memberCount?: number }) {
   return (
     <header className="flex items-center gap-3 border-b border-rule px-4 py-3">
-      <h2 className="font-display text-lg font-semibold text-ink">@{name}</h2>
+      <h2 className="font-display text-lg font-semibold text-ink">{isGroup ? name : `@${name}`}</h2>
       <span className="truncate border-l border-rule pl-3 text-[13px] text-ink-2">
-        Direct message · only the two of you
+        {isGroup ? `Direct message · ${memberCount ?? 0} people` : 'Direct message · only the two of you'}
       </span>
       <SearchButton />
     </header>
@@ -180,6 +180,42 @@ export function DmView() {
           />
           <TypingIndicator channelId={dm.id} currentUserId={auth?.user.id} />
           <Composer channelId={dm.id} placeholder={`Message @${username}`} />
+        </>
+      )}
+    </div>
+  )
+}
+
+export function DmByIdView() {
+  const { id } = useParams()
+  const { data: auth } = useAuth()
+  const dm = useDmById(id)
+  const dmsQuery = useQuery({ queryKey: ['dms'], queryFn: api.listDMs })
+  const memberCount = dmsQuery.data?.data.find((d) => d.id === id)?.members?.length
+  const listRef = useRef<MessageListHandle>(null)
+  usePendingJump(dm.id, listRef)
+
+  return (
+    <div className="flex h-full flex-col">
+      <DmHeader name={dm.name} isGroup={dm.kind === 'group_dm'} memberCount={memberCount} />
+      {dm.isLoading || !dm.id ? (
+        <div role="log" aria-live="polite" className="flex flex-1 items-center justify-center text-ink-3">
+          Loading…
+        </div>
+      ) : (
+        <>
+          <PulseRuler
+            channelId={dm.id}
+            onJump={(messageId) => listRef.current?.scrollToMessage(messageId, { fetchIfMissing: true })}
+          />
+          <MessageList
+            ref={listRef}
+            channelId={dm.id}
+            lastReadMessageId={dm.lastReadMessageId}
+            currentUsername={auth?.user.username}
+          />
+          <TypingIndicator channelId={dm.id} currentUserId={auth?.user.id} />
+          <Composer channelId={dm.id} placeholder={`Message ${dm.name}`} />
         </>
       )}
     </div>

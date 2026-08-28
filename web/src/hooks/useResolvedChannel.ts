@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { dmDisplayName } from '../lib/dm'
 
 export interface ResolvedChannel {
   id: string
   name: string
   topic: string
-  kind: 'public' | 'private' | 'dm' | null
+  kind: 'public' | 'private' | 'dm' | 'group_dm' | null
   lastReadMessageId: string | null
   isLoading: boolean
 }
@@ -31,7 +32,7 @@ export function useDmByUsername(username: string | undefined): ResolvedChannel {
   const dmsQuery = useQuery({ queryKey: ['dms'], queryFn: api.listDMs })
   const [creating, setCreating] = useState(false)
 
-  const dm = dmsQuery.data?.data.find((d) => d.peer.username === username)
+  const dm = dmsQuery.data?.data.find((d) => d.kind === 'dm' && d.peer?.username === username)
 
   useEffect(() => {
     if (dm || creating || !username || dmsQuery.isLoading) return
@@ -41,7 +42,7 @@ export function useDmByUsername(username: string | undefined): ResolvedChannel {
         const users = await api.listUsers({ q: username, limit: 5 })
         const peer = users.data.find((u) => u.username === username)
         if (peer) {
-          await api.createDM(peer.id)
+          await api.createDM([peer.id])
           await queryClient.invalidateQueries({ queryKey: ['dms'] })
         }
       } finally {
@@ -52,10 +53,27 @@ export function useDmByUsername(username: string | undefined): ResolvedChannel {
 
   return {
     id: dm?.id ?? '',
-    name: dm?.peer.display_name || dm?.peer.username || username || '',
+    name: dm?.peer?.display_name || dm?.peer?.username || username || '',
     topic: '',
     kind: dm ? 'dm' : null,
     lastReadMessageId: dm?.last_read_message_id ?? null,
     isLoading: dmsQuery.isLoading || (!dm && creating),
+  }
+}
+
+/** Resolves a DM or group DM route param by channel id from the cached DM list — no
+ * create-on-open needed, since the caller always already has a real channel id (from a
+ * POST /dms response or the sidebar list). */
+export function useDmById(id: string | undefined): ResolvedChannel {
+  const dmsQuery = useQuery({ queryKey: ['dms'], queryFn: api.listDMs })
+  const dm = dmsQuery.data?.data.find((d) => d.id === id)
+
+  return {
+    id: dm?.id ?? '',
+    name: dm ? dmDisplayName(dm) : '',
+    topic: '',
+    kind: dm?.kind ?? null,
+    lastReadMessageId: dm?.last_read_message_id ?? null,
+    isLoading: dmsQuery.isLoading,
   }
 }

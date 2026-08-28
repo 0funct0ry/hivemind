@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
-import { useEffect, useRef, useState } from 'react'
-import { api } from '../lib/api'
+import { useEffect, useState } from 'react'
+import { api, type DM } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useUiStore } from '../store/ui'
 import { wsClient, type ConnectionState } from '../lib/ws'
@@ -9,18 +9,25 @@ import { Avatar } from './Avatar'
 import { CreateChannelModal } from './CreateChannelModal'
 import { BrowseChannelsModal } from './BrowseChannelsModal'
 import { ProfileModal } from './ProfileModal'
+import { NewMessageModal } from './NewMessageModal'
+import { PopoverMenu, MenuItem } from './PopoverMenu'
+import { dmDisplayName, dmIsOnline } from '../lib/dm'
 import { useQueryClient } from '@tanstack/react-query'
 
+/** Matches the mockup's `.badge`/`.badge.mute`: the unread count always renders as a pill —
+ * pollen when the channel has a mention, muted ink-3 gray otherwise. Never a bare dot. */
 function UnreadIndicator({ count, mentioned }: { count: number; mentioned: boolean }) {
   if (count === 0) return null
-  if (mentioned) {
-    return (
-      <span className="ml-auto rounded-full bg-pollen px-1.5 py-0.5 font-mono text-[11px] leading-none text-white">
-        {count}
-      </span>
-    )
-  }
-  return <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-ink" aria-hidden />
+  return (
+    <span
+      className={
+        'shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-semibold leading-none text-white ' +
+        (mentioned ? 'bg-pollen' : 'bg-ink-3')
+      }
+    >
+      {count}
+    </span>
+  )
 }
 
 function BrandMark() {
@@ -56,81 +63,6 @@ function useConnectionState(): ConnectionState {
   return state
 }
 
-/** A small anchored popover menu, closing on Esc, outside click, or item select, with a basic focus trap. */
-function PopoverMenu({
-  anchorClassName,
-  onClose,
-  children,
-}: {
-  anchorClassName: string
-  onClose: () => void
-  children: React.ReactNode
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const first = ref.current?.querySelector<HTMLElement>('[role="menuitem"]')
-    first?.focus()
-
-    function handlePointerDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-        return
-      }
-      if (e.key !== 'Tab' || !ref.current) return
-      const items = Array.from(ref.current.querySelectorAll<HTMLElement>('[role="menuitem"]'))
-      if (items.length === 0) return
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('mousedown', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [onClose])
-
-  return (
-    <div
-      ref={ref}
-      role="menu"
-      className={
-        'absolute z-40 min-w-[170px] rounded-md border border-rule bg-paper py-1 font-body normal-case tracking-normal shadow-lg ' +
-        anchorClassName
-      }
-    >
-      {children}
-    </div>
-  )
-}
-
-function MenuItem({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      onClick={onClick}
-      className={
-        'block w-full px-3 py-1.5 text-left text-sm hover:bg-paper-3 ' + (danger ? 'text-red-600' : 'text-ink-2')
-      }
-    >
-      {children}
-    </button>
-  )
-}
-
 export function Sidebar() {
   const [createOpen, setCreateOpen] = useState(false)
   const [browseOpen, setBrowseOpen] = useState(false)
@@ -139,6 +71,8 @@ export function Sidebar() {
   const [footerMenuOpen, setFooterMenuOpen] = useState(false)
   const [channelMenuOpen, setChannelMenuOpen] = useState(false)
   const [leaveMenuId, setLeaveMenuId] = useState<string | null>(null)
+  const [dmMenuId, setDmMenuId] = useState<string | null>(null)
+  const [newMessageOpen, setNewMessageOpen] = useState(false)
   const queryClient = useQueryClient()
   const channelsQuery = useQuery({ queryKey: ['channels'], queryFn: api.listChannels })
   const dmsQuery = useQuery({ queryKey: ['dms'], queryFn: api.listDMs })
@@ -153,12 +87,12 @@ export function Sidebar() {
   const connectionState = useConnectionState()
 
   const unreadByChannel = new Map(
-    (unreadsQuery.data?.data ?? []).map((u) => [u.channel_id, u]),
+    (unreadsQuery.data?.channels ?? []).map((u) => [u.channel_id, u]),
   )
   const online = new Set(presenceQuery.data?.online ?? [])
 
   const channels = channelsQuery.data?.data ?? []
-  const publicAndPrivate = channels.filter((c) => c.kind !== 'dm' && c.joined)
+  const publicAndPrivate = channels.filter((c) => c.kind !== 'dm' && c.kind !== 'group_dm' && c.joined)
   const dms = dmsQuery.data?.data ?? []
 
   function openProfile(mode: 'view' | 'edit') {
@@ -178,6 +112,12 @@ export function Sidebar() {
     setLeaveMenuId(null)
     await api.leaveChannel(channelId)
     await queryClient.invalidateQueries({ queryKey: ['channels'] })
+  }
+
+  async function removeConversation(channelId: string) {
+    setDmMenuId(null)
+    await api.hideDM(channelId)
+    await queryClient.invalidateQueries({ queryKey: ['dms'] })
   }
 
   return (
@@ -267,24 +207,28 @@ export function Sidebar() {
               >
                 <span>{c.kind === 'private' ? '🔒' : '#'}</span>
                 <span className="truncate">{c.name}</span>
-                {unread && (
-                  <UnreadIndicator count={unread.unread_count} mentioned={unread.mention_count > 0} />
-                )}
-                {canLeave && (
-                  <button
-                    type="button"
-                    title="Channel options"
-                    aria-label={`Channel options for #${c.name}`}
-                    onClick={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      setLeaveMenuId(c.id)
-                    }}
-                    className="ml-auto hidden shrink-0 px-1 text-sm leading-none text-ink-3 hover:text-ink group-hover/row:block"
-                  >
-                    ⋮
-                  </button>
-                )}
+                {/* Badge + kebab share one fixed-width trailing group so the kebab's
+                    hover-only reveal (opacity, not display) never shifts the badge. */}
+                <span className="ml-auto flex shrink-0 items-center gap-1">
+                  {unread && (
+                    <UnreadIndicator count={unread.unread_count} mentioned={unread.has_mention} />
+                  )}
+                  {canLeave && (
+                    <button
+                      type="button"
+                      title="Channel options"
+                      aria-label={`Channel options for #${c.name}`}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setLeaveMenuId(c.id)
+                      }}
+                      className="px-1 text-sm leading-none text-ink-3 opacity-0 hover:text-ink focus-visible:opacity-100 group-hover/row:opacity-100"
+                    >
+                      ⋮
+                    </button>
+                  )}
+                </span>
               </NavLink>
               {leaveMenuId === c.id && (
                 <PopoverMenu anchorClassName="right-0 top-full mt-1" onClose={() => setLeaveMenuId(null)}>
@@ -304,21 +248,37 @@ export function Sidebar() {
           type="button"
           title="New direct message"
           aria-label="New direct message"
-          onClick={() => openCommandPalette()}
+          onClick={() => setNewMessageOpen(true)}
           className="ml-auto px-1 text-sm leading-none text-ink-3 hover:text-teal"
         >
           +
         </button>
       </div>
       <ul className="flex flex-col gap-0.5">
-        {dms.length === 0 && <li className="px-2 py-1 text-sm text-ink-3">No direct messages yet.</li>}
-        {dms.map((d) => {
+        {dms.length === 0 && (
+          <li className="px-2 py-1">
+            <p className="text-sm text-ink-3">No direct messages yet.</p>
+            <button
+              type="button"
+              onClick={() => setNewMessageOpen(true)}
+              className="mt-1 text-sm text-teal hover:underline"
+            >
+              Start a conversation
+            </button>
+          </li>
+        )}
+        {dms.map((d: DM) => {
           const unread = unreadByChannel.get(d.id)
-          const isOnline = online.has(d.peer.id)
+          const isOnline = dmIsOnline(d, online)
+          const name = dmDisplayName(d)
           return (
-            <li key={d.id}>
+            <li key={d.id} className="group/row relative">
               <NavLink
-                to={`/dm/${d.peer.username}`}
+                to={`/dm/id/${d.id}`}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setDmMenuId(d.id)
+                }}
                 className={({ isActive }) =>
                   'flex items-center gap-1.5 rounded px-2 py-1 text-sm ' +
                   (isActive ? 'bg-teal-soft text-teal' : 'text-ink-2 hover:bg-paper-3')
@@ -331,11 +291,35 @@ export function Sidebar() {
                   }
                   aria-hidden
                 />
-                <span className="truncate">{d.peer.display_name || d.peer.username}</span>
-                {unread && (
-                  <UnreadIndicator count={unread.unread_count} mentioned={unread.mention_count > 0} />
-                )}
+                <span className="truncate">{name}</span>
+                {/* Badge + kebab share one fixed-width trailing group, same as channel
+                    rows, so the kebab's hover-only reveal never shifts the badge. */}
+                <span className="ml-auto flex shrink-0 items-center gap-1">
+                  {unread && (
+                    <UnreadIndicator count={unread.unread_count} mentioned={unread.has_mention} />
+                  )}
+                  <button
+                    type="button"
+                    title="Conversation options"
+                    aria-label={`Conversation options for ${name}`}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setDmMenuId(d.id)
+                    }}
+                    className="px-1 text-sm leading-none text-ink-3 opacity-0 hover:text-ink focus-visible:opacity-100 group-hover/row:opacity-100"
+                  >
+                    ⋮
+                  </button>
+                </span>
               </NavLink>
+              {dmMenuId === d.id && (
+                <PopoverMenu anchorClassName="right-0 top-full mt-1" onClose={() => setDmMenuId(null)}>
+                  <MenuItem onClick={() => removeConversation(d.id)} danger>
+                    Remove conversation
+                  </MenuItem>
+                </PopoverMenu>
+              )}
             </li>
           )
         })}
@@ -385,6 +369,7 @@ export function Sidebar() {
       {auth?.user && <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} user={auth.user} mode={profileMode} />}
       <CreateChannelModal open={createOpen} onClose={() => setCreateOpen(false)} />
       <BrowseChannelsModal open={browseOpen} onClose={() => setBrowseOpen(false)} />
+      <NewMessageModal open={newMessageOpen} onClose={() => setNewMessageOpen(false)} />
     </nav>
   )
 }
