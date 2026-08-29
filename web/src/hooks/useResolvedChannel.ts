@@ -10,6 +10,11 @@ export interface ResolvedChannel {
   kind: 'public' | 'private' | 'dm' | 'group_dm' | null
   lastReadMessageId: string | null
   isLoading: boolean
+  /** True once the backing list has been fetched at least once and no longer contains this
+   * channel/DM — distinct from `isLoading`, so callers can tell "still loading" apart from
+   * "genuinely gone" (e.g. you left the channel, or the conversation was removed) instead of
+   * showing an indefinite loading spinner for both. */
+  notFound: boolean
 }
 
 /** Resolves a `#slug` route param to its channel id + read watermark from the cached channel list. */
@@ -23,6 +28,7 @@ export function useChannelBySlug(slug: string | undefined): ResolvedChannel {
     kind: channel?.kind ?? null,
     lastReadMessageId: channel?.last_read_message_id ?? null,
     isLoading: query.isLoading,
+    notFound: !!slug && query.isFetched && !channel,
   }
 }
 
@@ -58,6 +64,10 @@ export function useDmByUsername(username: string | undefined): ResolvedChannel {
     kind: dm ? 'dm' : null,
     lastReadMessageId: dm?.last_read_message_id ?? null,
     isLoading: dmsQuery.isLoading || (!dm && creating),
+    // This route auto-creates the DM on first open (see the effect above), so "not found in
+    // the list yet" is expected and transient here, not a signal that the conversation was
+    // removed — leave notFound false and let isLoading cover the whole create flow.
+    notFound: false,
   }
 }
 
@@ -75,5 +85,6 @@ export function useDmById(id: string | undefined): ResolvedChannel {
     kind: dm?.kind ?? null,
     lastReadMessageId: dm?.last_read_message_id ?? null,
     isLoading: dmsQuery.isLoading,
+    notFound: !!id && dmsQuery.isFetched && !dm,
   }
 }

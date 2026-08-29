@@ -1,8 +1,10 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/0funct0ry/hivemind/internal/store"
@@ -403,4 +405,204 @@ func TestMessageAPIMentionsAndAutocomplete(t *testing.T) {
 	if code != 201 {
 		t.Fatalf("expected 201, got %d. Body: %s", code, resp)
 	}
+}
+
+func postMessage(t *testing.T, tc *testContext, channelID int64, session, body string) string {
+	t.Helper()
+	code, resp := tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", channelID), session, map[string]any{"body": body})
+	if code != 201 && code != 200 {
+		t.Fatalf("expected 200/201 posting message, got %d. Body: %s", code, resp)
+	}
+	var out struct {
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Message.ID
+}
+
+func TestMessageEditAPI(t *testing.T) {
+	ResetMsgLimiter()
+	tc := setupTestContext(t)
+	defer tc.close()
+
+	t.Run("author edit within window succeeds", func(t *testing.T) {
+		id := postMessage(t, tc, tc.pubCh.ID, tc.sMember, "before edit")
+
+		code, resp := tc.request("PATCH", "/api/v1/messages/"+id, tc.sMember, map[string]any{"body": "after edit"})
+		if code != 200 {
+			t.Fatalf("expected 200, got %d. Body: %s", code, resp)
+		}
+		var out struct {
+			Message struct {
+				Body     string `json:"body"`
+				EditedAt *int64 `json:"edited_at"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(resp), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Message.Body != "after edit" {
+			t.Errorf("expected updated body, got %q", out.Message.Body)
+		}
+		if out.Message.EditedAt == nil {
+			t.Error("expected edited_at to be set")
+		}
+	})
+
+	t.Run("non-author edit fails with 403", func(t *testing.T) {
+		id := postMessage(t, tc, tc.pubCh.ID, tc.sMember, "owned by member")
+
+		code, resp := tc.request("PATCH", "/api/v1/messages/"+id, tc.sAdmin, map[string]any{"body": "hijacked"})
+		if code != 403 {
+			t.Fatalf("expected 403, got %d. Body: %s", code, resp)
+		}
+		var out struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(resp), &out)
+		if out.Error.Code != "not_message_owner" {
+			t.Errorf("expected not_message_owner, got %q", out.Error.Code)
+		}
+	})
+
+	t.Run("edit after window expired returns 409", func(t *testing.T) {
+		id := postMessage(t, tc, tc.pubCh.ID, tc.sMember, "will go stale")
+		idInt, _ := strconv.ParseInt(id, 10, 64)
+
+		if err := tc.s.Tx(tc.ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(tc.ctx, "UPDATE messages SET created_at = ? WHERE id = ?", 0, idInt)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		code, resp := tc.request("PATCH", "/api/v1/messages/"+id, tc.sMember, map[string]any{"body": "too late"})
+		if code != 409 {
+			t.Fatalf("expected 409, got %d. Body: %s", code, resp)
+		}
+		var out struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(resp), &out)
+		if out.Error.Code != "edit_window_expired" {
+			t.Errorf("expected edit_window_expired, got %q", out.Error.Code)
+		}
+	})
+
+	t.Run("edit nonexistent message returns 404", func(t *testing.T) {
+		code, resp := tc.request("PATCH", "/api/v1/messages/999999", tc.sMember, map[string]any{"body": "nope"})
+		if code != 404 {
+			t.Fatalf("expected 404, got %d. Body: %s", code, resp)
+		}
+	})
+}
+
+func TestMessageDeleteAPI(t *testing.T) {
+	ResetMsgLimiter()
+	tc := setupTestContext(t)
+	defer tc.close()
+
+	t.Run("author can delete own message", func(t *testing.T) {
+		id := postMessage(t, tc, tc.pubCh.ID, tc.sMember, "delete me")
+
+		code, resp := tc.request("DELETE", "/api/v1/messages/"+id, tc.sMember, nil)
+		if code != 200 {
+			t.Fatalf("expected 200, got %d. Body: %s", code, resp)
+		}
+		var out struct {
+			Message struct {
+				Body      string `json:"body"`
+				DeletedAt *int64 `json:"deleted_at"`
+				DeletedBy struct {
+					ID     string `json:"id"`
+					IsSelf bool   `json:"is_self"`
+				} `json:"deleted_by"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(resp), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Message.Body != "" {
+			t.Errorf("expected blanked body, got %q", out.Message.Body)
+		}
+		if out.Message.DeletedAt == nil {
+			t.Error("expected deleted_at to be set")
+		}
+		if !out.Message.DeletedBy.IsSelf {
+			t.Error("expected deleted_by.is_self=true")
+		}
+	})
+
+	t.Run("non-author non-admin cannot delete", func(t *testing.T) {
+		id := postMessage(t, tc, tc.pubCh.ID, tc.sMember, "protected")
+
+		code, resp := tc.request("DELETE", "/api/v1/messages/"+id, tc.sNonMember, nil)
+		if code != 403 {
+			t.Fatalf("expected 403, got %d. Body: %s", code, resp)
+		}
+	})
+
+	t.Run("admin can delete someone else's message", func(t *testing.T) {
+		id := postMessage(t, tc, tc.pubCh.ID, tc.sMember, "moderated")
+
+		code, resp := tc.request("DELETE", "/api/v1/messages/"+id, tc.sAdmin, nil)
+		if code != 200 {
+			t.Fatalf("expected 200, got %d. Body: %s", code, resp)
+		}
+		var out struct {
+			Message struct {
+				DeletedBy struct {
+					IsSelf bool `json:"is_self"`
+				} `json:"deleted_by"`
+			} `json:"message"`
+		}
+		_ = json.Unmarshal([]byte(resp), &out)
+		if out.Message.DeletedBy.IsSelf {
+			t.Error("expected deleted_by.is_self=false for admin-delete")
+		}
+	})
+
+	t.Run("deleting an already-deleted message is idempotent", func(t *testing.T) {
+		id := postMessage(t, tc, tc.pubCh.ID, tc.sMember, "delete twice")
+
+		code1, _ := tc.request("DELETE", "/api/v1/messages/"+id, tc.sMember, nil)
+		code2, resp2 := tc.request("DELETE", "/api/v1/messages/"+id, tc.sMember, nil)
+		if code1 != 200 || code2 != 200 {
+			t.Fatalf("expected both deletes to return 200, got %d and %d. Body: %s", code1, code2, resp2)
+		}
+	})
+
+	t.Run("reply to a just-deleted thread root returns 404 thread_locked", func(t *testing.T) {
+		rootID := postMessage(t, tc, tc.pubCh.ID, tc.sMember, "will lock")
+
+		code, resp := tc.request("DELETE", "/api/v1/messages/"+rootID, tc.sMember, nil)
+		if code != 200 {
+			t.Fatalf("expected 200 deleting root, got %d. Body: %s", code, resp)
+		}
+
+		code, resp = tc.request("POST", fmt.Sprintf("/api/v1/channels/%d/messages", tc.pubCh.ID), tc.sMember, map[string]any{
+			"body":      "too late reply",
+			"thread_id": rootID,
+		})
+		if code != 404 {
+			t.Fatalf("expected 404, got %d. Body: %s", code, resp)
+		}
+		var out struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(resp), &out)
+		if out.Error.Code != "thread_locked" {
+			t.Errorf("expected thread_locked, got %q", out.Error.Code)
+		}
+	})
 }

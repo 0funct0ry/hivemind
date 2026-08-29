@@ -211,3 +211,98 @@ func TestDMHideAPI(t *testing.T) {
 		t.Errorf("expected 404 hiding a non-DM channel, got %d", code)
 	}
 }
+
+// TestDMHideAPI_ReopenViaCreate is a regression test for a bug found in manual QA: hiding a
+// DM then "starting a new conversation" with the same person via POST /dms (the New Message
+// modal's path) must unhide it immediately, without requiring a message to be sent first —
+// otherwise the client navigates to a channel id that never appears in GET /dms and gets
+// stuck.
+func TestDMHideAPI_ReopenViaCreate(t *testing.T) {
+	tc := setupTestContext(t)
+	defer tc.close()
+
+	body := map[string]any{"user_ids": []int64{tc.uMember.ID}}
+	code, respStr := tc.request("POST", "/api/v1/dms", tc.sAdmin, body)
+	if code != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", code, respStr)
+	}
+	var resp struct {
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	if err := json.Unmarshal([]byte(respStr), &resp); err != nil {
+		t.Fatal(err)
+	}
+	chID := resp.Channel.ID
+
+	code, _ = tc.request("POST", fmt.Sprintf("/api/v1/channels/%s/messages", chID), tc.sAdmin, map[string]any{"body": "hello"})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201 creating message, got %d", code)
+	}
+
+	code, _ = tc.request("POST", fmt.Sprintf("/api/v1/dms/%s/hide", chID), tc.sAdmin, nil)
+	if code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", code)
+	}
+
+	// Sanity: confirm it's actually hidden before re-resolving.
+	code, listStr := tc.request("GET", "/api/v1/dms", tc.sAdmin, nil)
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	var hiddenList struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(listStr), &hiddenList); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range hiddenList.Data {
+		if d.ID == chID {
+			t.Fatalf("expected DM %s to be hidden before re-resolving, got %+v", chID, hiddenList.Data)
+		}
+	}
+
+	// Re-resolve the same DM via POST /dms, exactly like the New Message modal's "Go!"
+	// button — no new message is sent.
+	code, respStr = tc.request("POST", "/api/v1/dms", tc.sAdmin, body)
+	if code != 200 {
+		t.Fatalf("expected 200 re-resolving, got %d. Body: %s", code, respStr)
+	}
+	var reopened struct {
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	if err := json.Unmarshal([]byte(respStr), &reopened); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Channel.ID != chID {
+		t.Fatalf("expected re-resolving to return the same channel id %s, got %s", chID, reopened.Channel.ID)
+	}
+
+	// It must now be back in Alice's list — no new message needed.
+	code, listStr = tc.request("GET", "/api/v1/dms", tc.sAdmin, nil)
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	var reappearedList struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(listStr), &reappearedList); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range reappearedList.Data {
+		if d.ID == chID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected the DM to reappear for Alice immediately after re-resolving it, got %+v", reappearedList.Data)
+	}
+}

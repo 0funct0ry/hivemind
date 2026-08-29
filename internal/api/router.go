@@ -140,6 +140,8 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.POST("/channels/:id/messages", messageCreate(s, h))
 	v1.POST("/channels/:id/read", channelRead(s, h))
 	v1.GET("/messages/:id", messageGet(s))
+	v1.PATCH("/messages/:id", messageUpdate(s, h))
+	v1.DELETE("/messages/:id", messageDelete(s, h))
 	v1.GET("/messages/:id/replies", messageListReplies(s))
 
 	v1.GET("/dms", dmList(s, h))

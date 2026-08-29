@@ -358,6 +358,111 @@ func TestHideConversation(t *testing.T) {
 	}
 }
 
+// TestHideConversation_UnhiddenByResolve_DM is a regression test: reopening a previously-
+// hidden 1:1 DM via GetOrCreateDM (the New Message modal's "start a conversation" path) must
+// unhide it for the caller immediately, without waiting for a new message. Before the fix, a
+// hidden conversation stayed excluded from ListDMs forever once "recreated" this way, leaving
+// the client navigated to a channel id it could never resolve.
+func TestHideConversation_UnhiddenByResolve_DM(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	u1, _ := s.CreateUser(ctx, UserInput{Username: "alice", Email: "alice@example.com"})
+	u2, _ := s.CreateUser(ctx, UserInput{Username: "bob", Email: "bob@example.com"})
+
+	dm, err := s.GetOrCreateDM(ctx, u1.ID, u2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: dm.ID, UserID: u1.ID, Body: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HideConversation(ctx, u1.ID, dm.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListDMs(ctx, u1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected 0 DMs for alice after hiding, got %d", len(list))
+	}
+
+	// Re-resolving the same DM (no new message) must unhide it for alice immediately.
+	if _, err := s.GetOrCreateDM(ctx, u1.ID, u2.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.ListDMs(ctx, u1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected the DM to reappear for alice after resolving it again, got %d", len(list))
+	}
+
+	// Bob never hid it, so re-resolving as alice must not disturb his hidden_at (nil).
+	list, err = s.ListDMs(ctx, u2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected bob to still see the DM, got %d", len(list))
+	}
+}
+
+// TestHideConversation_UnhiddenByResolve_GroupDM mirrors the 1:1 case above for group DMs.
+func TestHideConversation_UnhiddenByResolve_GroupDM(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	u1, _ := s.CreateUser(ctx, UserInput{Username: "alice", Email: "alice@example.com"})
+	u2, _ := s.CreateUser(ctx, UserInput{Username: "bob", Email: "bob@example.com"})
+	u3, _ := s.CreateUser(ctx, UserInput{Username: "carol", Email: "carol@example.com"})
+
+	gdm, err := s.GetOrCreateGroupDM(ctx, []int64{u1.ID, u2.ID, u3.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: gdm.ID, UserID: u1.ID, Body: "hi all"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HideConversation(ctx, u1.ID, gdm.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListDMs(ctx, u1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected 0 DMs for alice after hiding the group DM, got %d", len(list))
+	}
+
+	if _, err := s.GetOrCreateGroupDM(ctx, []int64{u1.ID, u2.ID, u3.ID}); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.ListDMs(ctx, u1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected the group DM to reappear for alice after resolving it again, got %d", len(list))
+	}
+}
+
 func TestHideConversation_NotFoundForNonMember(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(ctx, t.TempDir())

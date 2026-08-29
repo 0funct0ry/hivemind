@@ -394,8 +394,8 @@ func TestThreads(t *testing.T) {
 		Body:      "Reply to deleted root",
 		ThreadID:  &root.ID,
 	})
-	if !errors.Is(err, ErrThreadDeleted) {
-		t.Errorf("expected ErrThreadDeleted, got %v", err)
+	if !errors.Is(err, ErrThreadLocked) {
+		t.Errorf("expected ErrThreadLocked, got %v", err)
 	}
 
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
@@ -559,4 +559,157 @@ func TestCreateMessageWithMentions(t *testing.T) {
 	if kinds2[charlie.ID] != "channel" {
 		t.Errorf("expected charlie to be 'channel', got %q", kinds2[charlie.ID])
 	}
+}
+
+func TestMessageMutation(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	admin, err := s.CreateUser(ctx, UserInput{Username: "admin", Email: "admin@example.com", PasswordHash: "hash", Role: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	author, err := s.CreateUser(ctx, UserInput{Username: "author", Email: "author@example.com", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateUser(ctx, UserInput{Username: "other", Email: "other@example.com", PasswordHash: "hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err := s.CreateChannel(ctx, "public", "mutation-test", "Mutation", "", admin.ID, []int64{admin.ID, author.ID, other.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("edit own message inside window succeeds", func(t *testing.T) {
+		msg, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch.ID, UserID: author.ID, Body: "original"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		updated, err := s.UpdateMessageBody(ctx, msg.ID, author.ID, "edited body")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if updated.Body != "edited body" {
+			t.Errorf("expected body 'edited body', got %q", updated.Body)
+		}
+		if updated.EditedAt == nil {
+			t.Error("expected edited_at to be set")
+		}
+	})
+
+	t.Run("edit after window expired fails", func(t *testing.T) {
+		msg, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch.ID, UserID: author.ID, Body: "stale"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Push created_at back beyond the 15-minute edit window.
+		if err := s.Tx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, "UPDATE messages SET created_at = ? WHERE id = ?", nowMillis()-editWindow-1000, msg.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = s.UpdateMessageBody(ctx, msg.ID, author.ID, "too late")
+		if !errors.Is(err, ErrEditNotApplied) {
+			t.Errorf("expected ErrEditNotApplied, got %v", err)
+		}
+	})
+
+	t.Run("edit someone else's message fails", func(t *testing.T) {
+		msg, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch.ID, UserID: author.ID, Body: "mine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = s.UpdateMessageBody(ctx, msg.ID, other.ID, "not yours")
+		if !errors.Is(err, ErrEditNotApplied) {
+			t.Errorf("expected ErrEditNotApplied, got %v", err)
+		}
+	})
+
+	t.Run("delete own message at any age succeeds", func(t *testing.T) {
+		msg, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch.ID, UserID: author.ID, Body: "to delete"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		deleted, err := s.DeleteMessage(ctx, msg.ID, author.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if deleted.DeletedAt == nil {
+			t.Error("expected deleted_at to be set")
+		}
+		if deleted.DeletedBy == nil || *deleted.DeletedBy != author.ID {
+			t.Errorf("expected deleted_by=%d, got %v", author.ID, deleted.DeletedBy)
+		}
+		if deleted.Body != "" {
+			t.Errorf("expected blanked body, got %q", deleted.Body)
+		}
+	})
+
+	t.Run("deleting an already-deleted message is a no-op", func(t *testing.T) {
+		msg, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch.ID, UserID: author.ID, Body: "delete twice"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		first, err := s.DeleteMessage(ctx, msg.ID, author.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := s.DeleteMessage(ctx, msg.ID, admin.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// deleted_by must not change on the second, no-op delete.
+		if second.DeletedBy == nil || *second.DeletedBy != *first.DeletedBy {
+			t.Errorf("expected deleted_by to remain %v, got %v", first.DeletedBy, second.DeletedBy)
+		}
+	})
+
+	t.Run("IsThreadLocked and reply insert against a deleted root", func(t *testing.T) {
+		root, _, err := s.CreateMessage(ctx, MessageInput{ChannelID: ch.ID, UserID: author.ID, Body: "root"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		locked, err := s.IsThreadLocked(ctx, root.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if locked {
+			t.Error("expected thread not locked before delete")
+		}
+
+		if _, err := s.DeleteMessage(ctx, root.ID, author.ID); err != nil {
+			t.Fatal(err)
+		}
+
+		locked, err = s.IsThreadLocked(ctx, root.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !locked {
+			t.Error("expected thread locked after root delete")
+		}
+
+		_, _, err = s.CreateMessage(ctx, MessageInput{ChannelID: ch.ID, UserID: other.ID, Body: "late reply", ThreadID: &root.ID})
+		if !errors.Is(err, ErrThreadLocked) {
+			t.Errorf("expected ErrThreadLocked, got %v", err)
+		}
+	})
 }

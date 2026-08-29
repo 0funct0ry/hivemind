@@ -52,12 +52,12 @@ export function AppShell() {
       </main>
       {openThreadId && (
         <div className="hidden md:block">
-          <ThreadPanel currentUsername={data.user.username} />
+          <ThreadPanel currentUsername={data.user.username} currentUserId={data.user.id} currentUserRole={data.user.role} />
         </div>
       )}
       {openThreadId && (
         <div className="fixed inset-0 z-40 bg-paper md:hidden">
-          <ThreadPanel currentUsername={data.user.username} />
+          <ThreadPanel currentUsername={data.user.username} currentUserId={data.user.id} currentUserRole={data.user.role} />
         </div>
       )}
       <CommandPalette />

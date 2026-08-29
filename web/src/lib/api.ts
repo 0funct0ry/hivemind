@@ -90,6 +90,7 @@ export interface Message {
   attachments: Attachment[]
   edited_at: number | null
   deleted_at: number | null
+  deleted_by: { id: string; is_self: boolean } | null
   created_at: number
   client_msg_id: string | null
   mentions: unknown[]
@@ -236,6 +237,9 @@ export const api = {
     body: { body: string; thread_id?: string; client_msg_id?: string; file_ids?: string[]; also_send_to_channel?: boolean },
   ) => request<{ message: Message }>(`/channels/${channelId}/messages`, { method: 'POST', body: JSON.stringify(body) }),
   getMessage: (id: string) => request<{ message: Message }>(`/messages/${id}`),
+  updateMessage: (id: string, body: string) =>
+    request<{ message: Message }>(`/messages/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
+  deleteMessage: (id: string) => request<{ message: Message }>(`/messages/${id}`, { method: 'DELETE' }),
   listReplies: (rootId: string, params: { after?: string; limit?: number } = {}) => {
     const qs = new URLSearchParams()
     if (params.after) qs.set('after', params.after)

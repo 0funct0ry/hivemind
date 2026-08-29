@@ -1,11 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
-import { api, type UploadedFile } from '../lib/api'
-import { newClientMsgId, useSendMessage } from '../hooks/useMessages'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { ApiError, api, type Message, type UploadedFile } from '../lib/api'
+import { newClientMsgId, useEditMessage, useMessages, useSendMessage } from '../hooks/useMessages'
 import { useUiStore } from '../store/ui'
 import { wsClient } from '../lib/ws'
 import { throttle } from '../lib/throttle'
 import { MentionPicker, useMentionCandidates } from './MentionPicker'
 import { fileTypeAbbrev } from '../lib/fileType'
+
+const EDIT_WINDOW_MS = 15 * 60 * 1000
+
+export interface ComposerHandle {
+  /** Enters edit mode on the given message, stashing the current draft to restore on Esc. */
+  startEdit: (message: Message) => void
+}
 
 interface UploadChip {
   id: string
@@ -20,26 +27,30 @@ function draftKey(channelId: string): string {
   return `hivemind:draft:${channelId}`
 }
 
-export function Composer({
-  channelId,
-  threadId,
-  placeholder,
-  onSent,
-}: {
-  channelId: string
-  threadId?: string
-  placeholder?: string
-  onSent?: () => void
-}) {
+export const Composer = forwardRef<
+  ComposerHandle,
+  {
+    channelId: string
+    threadId?: string
+    placeholder?: string
+    onSent?: () => void
+    currentUserId?: string
+  }
+>(function Composer({ channelId, threadId, placeholder, onSent, currentUserId }, ref) {
   const setDraft = useUiStore((s) => s.setDraft)
   const drafts = useUiStore((s) => s.drafts)
   const sendMutation = useSendMessage(channelId)
+  const editMutation = useEditMessage(channelId)
+  const { messages: channelMessages } = useMessages(threadId ? undefined : channelId)
 
   const [body, setBody] = useState('')
   const [uploads, setUploads] = useState<UploadChip[]>([])
   const [alsoSendToChannel, setAlsoSendToChannel] = useState(false)
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [mentionStart, setMentionStart] = useState(0)
+  const [editing, setEditing] = useState<{ id: string } | null>(null)
+  const [stashedDraft, setStashedDraft] = useState<string | null>(null)
+  const [editBanner, setEditBanner] = useState<string | null>(null)
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const draftStorageKey = threadId ? `${draftKey(channelId)}:thread:${threadId}` : draftKey(channelId)
@@ -60,10 +71,28 @@ export function Composer({
   }, [body])
 
   const persistDraft = (value: string) => {
+    if (editing) return // don't clobber the real draft with in-progress edit text
     if (value) window.localStorage.setItem(draftStorageKey, value)
     else window.localStorage.removeItem(draftStorageKey)
     if (!threadId) setDraft(channelId, value)
   }
+
+  const startEdit = (message: Message) => {
+    setStashedDraft(body)
+    setEditing({ id: message.id })
+    setEditBanner(null)
+    setBody(message.body)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  const cancelEdit = () => {
+    setEditing(null)
+    setEditBanner(null)
+    setBody(stashedDraft ?? '')
+    setStashedDraft(null)
+  }
+
+  useImperativeHandle(ref, () => ({ startEdit }))
 
   const sendTyping = useRef(
     throttle(() => wsClient.send('typing', { channel_id: channelId }), 3000),
@@ -150,9 +179,37 @@ export function Composer({
 
   const removeUpload = (id: string) => setUploads((u) => u.filter((c) => c.id !== id))
 
-  const canSend = (body.trim().length > 0 || uploads.some((u) => u.file)) && !uploads.some((u) => !u.file && !u.error)
+  const canSend = editing
+    ? body.trim().length > 0
+    : (body.trim().length > 0 || uploads.some((u) => u.file)) && !uploads.some((u) => !u.file && !u.error)
+
+  const handleSaveEdit = () => {
+    if (!editing || body.trim().length === 0) return
+    editMutation.mutate(
+      { id: editing.id, body: body.trim() },
+      {
+        onSuccess: () => {
+          setEditing(null)
+          setEditBanner(null)
+          setBody(stashedDraft ?? '')
+          setStashedDraft(null)
+        },
+        onError: (err) => {
+          if (err instanceof ApiError && err.code === 'edit_window_expired') {
+            setEditBanner('This message can no longer be edited (15-minute window expired).')
+          } else {
+            setEditBanner(err instanceof Error ? err.message : 'Could not save the edit.')
+          }
+        },
+      },
+    )
+  }
 
   const handleSend = () => {
+    if (editing) {
+      handleSaveEdit()
+      return
+    }
     if (!canSend) return
     const fileIds = uploads.filter((u) => u.file).map((u) => u.file!.id)
     sendMutation.mutate({
@@ -169,8 +226,30 @@ export function Composer({
     onSent?.()
   }
 
+  const handleEditLastMessage = () => {
+    if (!currentUserId) return
+    const cutoff = Date.now() - EDIT_WINDOW_MS
+    for (let i = channelMessages.length - 1; i >= 0; i--) {
+      const m = channelMessages[i]
+      if (m.user_id === currentUserId && !m.deleted_at && m.created_at > cutoff && !m.id.startsWith('optimistic-')) {
+        startEdit(m)
+        return
+      }
+    }
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionQuery !== null && ['ArrowDown', 'ArrowUp', 'Tab', 'Enter', 'Escape'].includes(e.key)) {
+      return
+    }
+    if (e.key === 'Escape' && editing) {
+      e.preventDefault()
+      cancelEdit()
+      return
+    }
+    if (e.key === 'ArrowUp' && body === '' && !editing) {
+      e.preventDefault()
+      handleEditLastMessage()
       return
     }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -187,6 +266,16 @@ export function Composer({
           onSelect={(c) => insertMention(c.key)}
           onDismiss={() => setMentionQuery(null)}
         />
+      )}
+      {editing && !editBanner && (
+        <div className="mb-1.5 flex items-center justify-between px-1 font-mono text-[10.5px] text-ink-3">
+          <span>Editing message (Press Esc to cancel)</span>
+        </div>
+      )}
+      {editBanner && (
+        <div className="mb-1.5 rounded-md border border-pollen bg-pollen-soft px-2.5 py-1.5 text-[12.5px] text-[#7A4E00]">
+          {editBanner}
+        </div>
       )}
       <div
         className="rounded-md border border-rule bg-paper"
@@ -275,14 +364,34 @@ export function Composer({
               </label>
             )}
           </div>
-          <button
-            type="button"
-            disabled={!canSend}
-            onClick={handleSend}
-            className="rounded bg-teal px-3 py-1 text-sm font-medium text-white hover:bg-[#0B564B] disabled:opacity-40 disabled:hover:bg-teal"
-          >
-            Send <kbd className="ml-1 font-mono text-[10px] opacity-70">↵</kbd>
-          </button>
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={cancelEdit}
+                className="rounded border border-rule px-3 py-1 text-sm text-ink-2 hover:bg-paper-3"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!canSend || editMutation.isPending}
+                onClick={handleSend}
+                className="rounded bg-teal px-3 py-1 text-sm font-medium text-white hover:bg-[#0B564B] disabled:opacity-40 disabled:hover:bg-teal"
+              >
+                {editMutation.isPending ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={!canSend}
+              onClick={handleSend}
+              className="rounded bg-teal px-3 py-1 text-sm font-medium text-white hover:bg-[#0B564B] disabled:opacity-40 disabled:hover:bg-teal"
+            >
+              Send <kbd className="ml-1 font-mono text-[10px] opacity-70">↵</kbd>
+            </button>
+          )}
         </div>
       </div>
       <div className="flex gap-3 px-1 pt-1.5 font-mono text-[9px] text-ink-3">
@@ -294,4 +403,4 @@ export function Composer({
       </div>
     </div>
   )
-}
+})

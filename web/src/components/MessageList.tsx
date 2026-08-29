@@ -3,14 +3,26 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api, type Attachment, type Message, type MessageUser } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
-import { useMessages } from '../hooks/useMessages'
+import { useDeleteMessage, useMessages } from '../hooks/useMessages'
 import { useUiStore } from '../store/ui'
 import { prefersReducedMotion } from '../lib/throttle'
 import { formatTime, formatDay, dayKey, relativeTime } from '../lib/time'
 import { shouldGroup } from '../lib/messageGrouping'
 import { fileTypeAbbrev } from '../lib/fileType'
 import { Avatar } from './Avatar'
-import { PopoverMenu } from './PopoverMenu'
+import { PopoverMenu, MenuItem } from './PopoverMenu'
+import { DeleteMessageDialog } from './DeleteMessageDialog'
+
+const EDIT_WINDOW_MS = 15 * 60 * 1000
+
+/** Chooses the deleted-message placeholder line from who's looking and who deleted it (SPEC §6.4). */
+function deletedPlaceholder(message: Message, currentUserId?: string): string {
+  const deletedBy = message.deleted_by
+  if (!deletedBy || deletedBy.is_self) return 'This message has been deleted.'
+  if (deletedBy.id === currentUserId) return 'Message deleted (Moderated)'
+  if (message.user_id === currentUserId) return 'Your message was deleted by an administrator.'
+  return 'This message has been deleted.'
+}
 
 function AttachmentView({ att }: { att: Attachment }) {
   const isImage = att.mime.startsWith('image/')
@@ -159,23 +171,125 @@ function ProfilePopoverTrigger({ user, children }: { user: MessageUser; children
   )
 }
 
+function MessageActions({
+  message,
+  canEdit,
+  canDelete,
+  onEdit,
+}: {
+  message: Message
+  canEdit: boolean
+  canDelete: boolean
+  onEdit: () => void
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const deleteMutation = useDeleteMessage(message.channel_id)
+
+  if (!canEdit && !canDelete) return null
+
+  return (
+    <div className="absolute right-3 top-0 hidden items-center gap-0.5 rounded-md border border-rule bg-paper shadow-sm group-hover:flex">
+      {canEdit && (
+        <button
+          type="button"
+          title="Edit message"
+          aria-label="Edit message"
+          onClick={onEdit}
+          className="px-1.5 py-1 text-ink-3 hover:text-ink"
+        >
+          ✎
+        </button>
+      )}
+      {canDelete && (
+        <span className="relative">
+          <button
+            type="button"
+            title="More actions"
+            aria-label="More actions"
+            onClick={() => setMenuOpen((v) => !v)}
+            className="px-1.5 py-1 text-ink-3 hover:text-ink"
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <PopoverMenu anchorClassName="right-0 top-full mt-1" onClose={() => setMenuOpen(false)}>
+              <MenuItem
+                danger
+                onClick={() => {
+                  setMenuOpen(false)
+                  setConfirmOpen(true)
+                }}
+              >
+                Delete Message
+              </MenuItem>
+            </PopoverMenu>
+          )}
+        </span>
+      )}
+      <DeleteMessageDialog
+        open={confirmOpen}
+        busy={deleteMutation.isPending}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={() => deleteMutation.mutate(message.id, { onSuccess: () => setConfirmOpen(false) })}
+      />
+    </div>
+  )
+}
+
 function MessageRow({
   message,
   grouped,
   currentUsername,
+  currentUserId,
+  currentUserRole,
   onOpenThread,
+  onEditMessage,
 }: {
   message: Message
   grouped: boolean
   currentUsername?: string
+  currentUserId?: string
+  currentUserRole?: string
   onOpenThread: (id: string) => void
+  onEditMessage: (message: Message) => void
 }) {
   const name = message.user?.display_name || message.user?.username || 'Unknown'
+
+  if (message.deleted_at) {
+    return (
+      <div
+        data-message-id={message.id}
+        className={
+          'grid grid-cols-[34px_minmax(0,1fr)] gap-2 px-4 ' + (grouped ? 'py-0.5 ' : 'py-1.5 ')
+        }
+      >
+        <div className="flex items-start justify-center pt-1">
+          {grouped ? null : <Avatar name={name} color={message.user?.avatar_color ?? '#999'} size={30} />}
+        </div>
+        <div>
+          {!grouped && (
+            <div className="flex items-baseline gap-2">
+              <b className="font-display text-sm font-semibold text-ink">{name}</b>
+              <time className="font-mono text-[11px] text-ink-3">{formatTime(message.created_at)}</time>
+            </div>
+          )}
+          <div className="text-sm italic text-ink-3">{deletedPlaceholder(message, currentUserId)}</div>
+        </div>
+      </div>
+    )
+  }
+
+  const isAuthor = message.user_id === currentUserId
+  const isAdmin = currentUserRole === 'admin'
+  const canEdit = isAuthor && Date.now() - message.created_at < EDIT_WINDOW_MS
+  const canDelete = isAuthor || isAdmin
+
   return (
     <div
       data-message-id={message.id}
       className={
-        'group grid grid-cols-[34px_minmax(0,1fr)] gap-2 px-4 transition-colors duration-1000 ' +
+        'group relative grid grid-cols-[34px_minmax(0,1fr)] gap-2 px-4 transition-colors duration-1000 ' +
         (grouped ? 'py-0.5 ' : 'py-1.5 ')
       }
     >
@@ -206,6 +320,11 @@ function MessageRow({
               <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>
             )}
             <time className="font-mono text-[11px] text-ink-3">{formatTime(message.created_at)}</time>
+            {message.edited_at && (
+              <span className="font-mono text-[10px] text-ink-3" title={new Date(message.edited_at).toLocaleString()}>
+                (edited)
+              </span>
+            )}
           </div>
         )}
         <div className="text-sm leading-relaxed text-ink [&_a]:break-all">
@@ -221,6 +340,12 @@ function MessageRow({
         )}
         <ThreadStrip message={message} onOpen={() => onOpenThread(message.id)} />
       </div>
+      <MessageActions
+        message={message}
+        canEdit={canEdit}
+        canDelete={canDelete}
+        onEdit={() => onEditMessage(message)}
+      />
     </div>
   )
 }
@@ -233,8 +358,15 @@ export interface MessageListHandle {
 
 export const MessageList = forwardRef<
   MessageListHandle,
-  { channelId: string; lastReadMessageId: string | null; currentUsername?: string }
->(function MessageList({ channelId, lastReadMessageId, currentUsername }, ref) {
+  {
+    channelId: string
+    lastReadMessageId: string | null
+    currentUsername?: string
+    currentUserId?: string
+    currentUserRole?: string
+    onEditMessage?: (message: Message) => void
+  }
+>(function MessageList({ channelId, lastReadMessageId, currentUsername, currentUserId, currentUserRole, onEditMessage }, ref) {
   const { messages, fetchNextPage, hasNextPage, isFetchingNextPage } = useMessages(channelId)
   const openThread = useUiStore((s) => s.openThread)
   const setUnreadAnchor = useUiStore((s) => s.setUnreadAnchor)
@@ -396,7 +528,10 @@ export const MessageList = forwardRef<
               message={m}
               grouped={grouped}
               currentUsername={currentUsername}
+              currentUserId={currentUserId}
+              currentUserRole={currentUserRole}
               onOpenThread={openThread}
+              onEditMessage={(message) => onEditMessage?.(message)}
             />
           </div>
         )

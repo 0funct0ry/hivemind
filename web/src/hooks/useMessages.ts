@@ -64,6 +64,7 @@ export function useSendMessage(channelId: string | undefined) {
         attachments: [],
         edited_at: null,
         deleted_at: null,
+        deleted_by: null,
         created_at: Date.now(),
         client_msg_id: input.clientMsgId,
         mentions: [],
@@ -81,6 +82,31 @@ export function useSendMessage(channelId: string | undefined) {
     onError: (_err, input) => {
       const key = input.threadId ? ['thread', input.threadId] : ['messages', channelId]
       queryClient.setQueryData(key, (old: unknown) => markFailed(old, input.threadId, input.clientMsgId))
+    },
+  })
+}
+
+export function useEditMessage(channelId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (input: { id: string; body: string }) => api.updateMessage(input.id, input.body).then((r) => r.message),
+    onSuccess: () => {
+      // The message itself updates via the message.updated WS event, like any other viewer —
+      // this keeps a single source of truth for the rendered message.
+      if (channelId) queryClient.invalidateQueries({ queryKey: ['messages', channelId] })
+    },
+  })
+}
+
+export function useDeleteMessage(channelId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => api.deleteMessage(id).then((r) => r.message),
+    onSuccess: () => {
+      if (channelId) queryClient.invalidateQueries({ queryKey: ['messages', channelId] })
+      queryClient.invalidateQueries({ queryKey: ['thread'] })
     },
   })
 }

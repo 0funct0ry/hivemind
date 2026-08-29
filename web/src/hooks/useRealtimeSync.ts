@@ -13,6 +13,18 @@ interface ThreadReplyPayload {
   root_id: string
 }
 
+interface MessageUpdatedPayload {
+  id: string
+  channel_id: string
+  thread_id: string | null
+}
+
+interface MessageDeletedPayload {
+  id: string
+  channel_id: string
+  thread_id: string | null
+}
+
 interface TypingPayload {
   channel_id: string
   user_id: string
@@ -54,6 +66,18 @@ export function useRealtimeSync() {
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['unreads'] })
     })
+    const offMessageUpdated = wsClient.on('message.updated', (payload) => {
+      const p = payload as MessageUpdatedPayload
+      queryClient.invalidateQueries({ queryKey: ['messages', p.channel_id] })
+      if (p.thread_id) queryClient.invalidateQueries({ queryKey: ['thread', p.thread_id] })
+    })
+    const offMessageDeleted = wsClient.on('message.deleted', (payload) => {
+      const p = payload as MessageDeletedPayload
+      queryClient.invalidateQueries({ queryKey: ['messages', p.channel_id] })
+      // A deleted message may itself be an open thread's root — invalidate that key too so
+      // the thread panel derives its locked state from the refetched root's deleted_at.
+      queryClient.invalidateQueries({ queryKey: ['thread', p.thread_id ?? p.id] })
+    })
     const offRead = wsClient.on('read.updated', invalidate(['unreads']))
     const offChannel = wsClient.on('channel.created', invalidate(['channels']))
     const offChannelUpdated = wsClient.on('channel.updated', invalidate(['channels']))
@@ -80,6 +104,8 @@ export function useRealtimeSync() {
       offState()
       offMessage()
       offThread()
+      offMessageUpdated()
+      offMessageDeleted()
       offRead()
       offChannel()
       offChannelUpdated()

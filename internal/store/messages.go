@@ -28,6 +28,7 @@ type Message struct {
 	Attachments    []Attachment `json:"attachments"`
 	EditedAt       *int64       `json:"edited_at"`
 	DeletedAt      *int64       `json:"deleted_at"`
+	DeletedBy      *int64       `json:"deleted_by"`
 	CreatedAt      int64        `json:"created_at"`
 }
 
@@ -56,11 +57,17 @@ type MessageInput struct {
 
 var (
 	ErrThreadChannelMismatch = errors.New("thread_channel_mismatch")
-	ErrThreadDeleted         = errors.New("thread_deleted")
+	ErrThreadLocked          = errors.New("thread_locked")
 	ErrUserDeactivated       = errors.New("user_deactivated")
 	ErrAttachmentNotFound    = errors.New("attachment_not_found")
 	ErrAttachmentForbidden   = errors.New("attachment_forbidden")
+	ErrNotMessageOwner       = errors.New("not_message_owner")
+	ErrEditWindowExpired     = errors.New("edit_window_expired")
+	ErrEditNotApplied        = errors.New("edit_not_applied")
 )
+
+// editWindow is how long after posting an author may still edit a message.
+const editWindow = 15 * 60 * 1000 // 15 minutes, in millis
 
 // isUniqueConstraintError checks if an error is a SQLite unique constraint violation.
 func isUniqueConstraintError(err error) bool {
@@ -147,7 +154,7 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 				return ErrThreadChannelMismatch
 			}
 			if parentDeletedAt.Valid {
-				return ErrThreadDeleted
+				return ErrThreadLocked
 			}
 			in.ThreadID = &rootID
 		}
@@ -169,14 +176,14 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 		if err != nil {
 			if isUniqueConstraintError(err) && in.ClientMsgID != nil {
 				existed = true
-				var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal sql.NullInt64
+				var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal, deletedByVal sql.NullInt64
 				var clientMsgIDVal sql.NullString
 				err = tx.QueryRowContext(ctx, `
-					SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
+					SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, deleted_by, created_at
 					FROM messages
 					WHERE user_id = ? AND client_msg_id = ?`,
 					in.UserID, *in.ClientMsgID).Scan(
-					&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
+					&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt)
 				if err != nil {
 					return fmt.Errorf("fetch existing message: %w", err)
 				}
@@ -194,6 +201,9 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 				}
 				if deletedAtVal.Valid {
 					msg.DeletedAt = &deletedAtVal.Int64
+				}
+				if deletedByVal.Valid {
+					msg.DeletedBy = &deletedByVal.Int64
 				}
 				return nil
 			}
@@ -380,13 +390,13 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 // GetMessage returns a single message by ID.
 func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	var msg Message
-	var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal sql.NullInt64
+	var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal, deletedByVal sql.NullInt64
 	var clientMsgIDVal sql.NullString
 	err := s.reader.QueryRowContext(ctx, `
-		SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
+		SELECT `+channelMessageColumns+`
 		FROM messages
 		WHERE id = ?`, id).Scan(
-		&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
+		&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Message{}, ErrNotFound
@@ -408,6 +418,9 @@ func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	if deletedAtVal.Valid {
 		msg.DeletedAt = &deletedAtVal.Int64
 	}
+	if deletedByVal.Valid {
+		msg.DeletedBy = &deletedByVal.Int64
+	}
 
 	messages := []Message{msg}
 	if err := s.HydrateMessages(ctx, messages); err != nil {
@@ -416,7 +429,7 @@ func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	return messages[0], nil
 }
 
-const channelMessageColumns = `id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at`
+const channelMessageColumns = `id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, deleted_by, created_at`
 
 // queryChannelMessages runs a channel-message query and scans the results, unhydrated.
 func (s *Store) queryChannelMessages(ctx context.Context, query string, args ...any) ([]Message, error) {
@@ -429,10 +442,10 @@ func (s *Store) queryChannelMessages(ctx context.Context, query string, args ...
 	var messages []Message
 	for rows.Next() {
 		var msg Message
-		var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal sql.NullInt64
+		var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal, deletedByVal sql.NullInt64
 		var clientMsgIDVal sql.NullString
 		err := rows.Scan(
-			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
+			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
@@ -450,6 +463,9 @@ func (s *Store) queryChannelMessages(ctx context.Context, query string, args ...
 		}
 		if deletedAtVal.Valid {
 			msg.DeletedAt = &deletedAtVal.Int64
+		}
+		if deletedByVal.Valid {
+			msg.DeletedBy = &deletedByVal.Int64
 		}
 		messages = append(messages, msg)
 	}
@@ -574,7 +590,7 @@ func (s *Store) ListReplies(ctx context.Context, rootID int64, after *int64, lim
 
 	if after != nil {
 		query = `
-			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
+			SELECT ` + channelMessageColumns + `
 			FROM messages
 			WHERE thread_id = ? AND id > ?
 			ORDER BY id ASC
@@ -582,7 +598,7 @@ func (s *Store) ListReplies(ctx context.Context, rootID int64, after *int64, lim
 		args = append(args, *after, limit)
 	} else {
 		query = `
-			SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, created_at
+			SELECT ` + channelMessageColumns + `
 			FROM messages
 			WHERE thread_id = ?
 			ORDER BY id ASC
@@ -599,10 +615,10 @@ func (s *Store) ListReplies(ctx context.Context, rootID int64, after *int64, lim
 	var replies []Message
 	for rows.Next() {
 		var msg Message
-		var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal sql.NullInt64
+		var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal, deletedByVal sql.NullInt64
 		var clientMsgIDVal sql.NullString
 		err := rows.Scan(
-			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &msg.CreatedAt)
+			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scan reply message: %w", err)
 		}
@@ -620,6 +636,9 @@ func (s *Store) ListReplies(ctx context.Context, rootID int64, after *int64, lim
 		}
 		if deletedAtVal.Valid {
 			msg.DeletedAt = &deletedAtVal.Int64
+		}
+		if deletedByVal.Valid {
+			msg.DeletedBy = &deletedByVal.Int64
 		}
 		replies = append(replies, msg)
 	}
@@ -749,6 +768,79 @@ func (s *Store) HydrateMessages(ctx context.Context, messages []Message) error {
 	}
 
 	return nil
+}
+
+// UpdateMessageBody edits a message's body. The caller must be the author and the message
+// must have been created within the last editWindow milliseconds; both checks are enforced in
+// the UPDATE's WHERE clause rather than as an app-level read-then-check. On zero rows affected
+// this returns ErrEditNotApplied, and it is up to the caller to issue a cheap follow-up read to
+// distinguish "not yours" from "window closed" from "already deleted".
+func (s *Store) UpdateMessageBody(ctx context.Context, id, userID int64, body string) (Message, error) {
+	body = strings.TrimSpace(body)
+	body = strings.ReplaceAll(body, "\x00", "")
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+
+	runes := utf8.RuneCountInString(body)
+	if runes < 1 || runes > 8000 {
+		return Message{}, fmt.Errorf("message body must be 1 to 8000 characters")
+	}
+
+	now := nowMillis()
+	cutoff := now - editWindow
+
+	res, err := s.writer.ExecContext(ctx, `
+		UPDATE messages
+		SET body = ?, edited_at = ?
+		WHERE id = ? AND user_id = ? AND created_at > ? AND deleted_at IS NULL`,
+		body, now, id, userID, cutoff)
+	if err != nil {
+		return Message{}, fmt.Errorf("update message body: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return Message{}, fmt.Errorf("update message body rows affected: %w", err)
+	}
+	if affected == 0 {
+		return Message{}, ErrEditNotApplied
+	}
+
+	return s.GetMessage(ctx, id)
+}
+
+// DeleteMessage soft-deletes a message: sets deleted_at/deleted_by and blanks the body.
+// Deleting an already-deleted message is a no-op, not an error — the caller re-reads and
+// returns the (already-deleted) message either way, matching the idempotency posture
+// client_msg_id already established for message creation. DeleteMessage does not check
+// ownership or role; the caller has already decided the requester may delete this message.
+func (s *Store) DeleteMessage(ctx context.Context, id int64, deletedBy int64) (Message, error) {
+	now := nowMillis()
+
+	_, err := s.writer.ExecContext(ctx, `
+		UPDATE messages
+		SET deleted_at = ?, deleted_by = ?, body = ''
+		WHERE id = ? AND deleted_at IS NULL`,
+		now, deletedBy, id)
+	if err != nil {
+		return Message{}, fmt.Errorf("delete message: %w", err)
+	}
+
+	return s.GetMessage(ctx, id)
+}
+
+// IsThreadLocked reports whether a thread's root message has been soft-deleted. Thread lock is
+// derived, never stored: a thread is locked exactly when its root row has deleted_at set.
+func (s *Store) IsThreadLocked(ctx context.Context, threadRootID int64) (bool, error) {
+	var deletedAt sql.NullInt64
+	err := s.reader.QueryRowContext(ctx, `
+		SELECT deleted_at FROM messages WHERE id = ? AND thread_id IS NULL`, threadRootID).Scan(&deletedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("check thread locked: %w", err)
+	}
+	return deletedAt.Valid, nil
 }
 
 // Mention represents a row in the mentions table.

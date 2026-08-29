@@ -86,6 +86,14 @@ func publicMessage(m store.Message) gin.H {
 		atts = append(atts, attVal)
 	}
 
+	var deletedByVal any = nil
+	if m.DeletedBy != nil {
+		deletedByVal = gin.H{
+			"id":      strconv.FormatInt(*m.DeletedBy, 10),
+			"is_self": *m.DeletedBy == m.UserID,
+		}
+	}
+
 	res := gin.H{
 		"id":              strconv.FormatInt(m.ID, 10),
 		"channel_id":      strconv.FormatInt(m.ChannelID, 10),
@@ -100,6 +108,7 @@ func publicMessage(m store.Message) gin.H {
 		"attachments":     atts,
 		"edited_at":       m.EditedAt,
 		"deleted_at":      m.DeletedAt,
+		"deleted_by":      deletedByVal,
 		"created_at":      m.CreatedAt,
 		"client_msg_id":   m.ClientMsgID,
 		"mentions":        []any{},
@@ -204,8 +213,8 @@ func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 				httpx.Fail(c, 400, "thread_channel_mismatch", "The parent thread and the reply must be in the same channel.")
 				return
 			}
-			if errors.Is(err, store.ErrThreadDeleted) {
-				httpx.Fail(c, 400, "thread_deleted", "Cannot reply to a deleted thread.")
+			if errors.Is(err, store.ErrThreadLocked) {
+				httpx.Fail(c, 404, "thread_locked", "This thread has been closed because the root message was deleted.")
 				return
 			}
 			if errors.Is(err, store.ErrUserDeactivated) {
@@ -525,6 +534,144 @@ func messageListReplies(s *store.Store) gin.HandlerFunc {
 			"root":     root,
 			"data":     data,
 			"has_more": hasMore,
+		})
+	}
+}
+
+// loadMessageForMutation resolves a message by id and checks the caller can access its
+// channel, masking a private-channel/DM message the same way as a nonexistent one. It writes
+// the 404 response itself on failure; callers should return immediately when ok is false.
+func loadMessageForMutation(c *gin.Context, s *store.Store, meID int64) (store.Message, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		httpx.Fail(c, 404, "message_not_found", "Message not found.")
+		return store.Message{}, false
+	}
+
+	msg, err := s.GetMessage(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+			httpx.Fail(c, 404, "message_not_found", "Message not found.")
+			return store.Message{}, false
+		}
+		httpx.Fail(c, 500, "internal_error", "Could not fetch message.")
+		return store.Message{}, false
+	}
+
+	access, err := s.CanAccessChannel(c.Request.Context(), meID, msg.ChannelID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+			httpx.Fail(c, 404, "message_not_found", "Message not found.")
+			return store.Message{}, false
+		}
+		httpx.Fail(c, 500, "internal_error", "Could not check channel access.")
+		return store.Message{}, false
+	}
+	if !access.CanRead {
+		httpx.Fail(c, 404, "message_not_found", "Message not found.")
+		return store.Message{}, false
+	}
+
+	return msg, true
+}
+
+func messageUpdate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		me, _ := CurrentUser(c)
+
+		msg, ok := loadMessageForMutation(c, s, me.ID)
+		if !ok {
+			return
+		}
+
+		var in struct {
+			Body string `json:"body"`
+		}
+		if err := c.ShouldBindJSON(&in); err != nil {
+			httpx.Fail(c, 400, "invalid_request", "Invalid request body.")
+			return
+		}
+
+		updated, err := s.UpdateMessageBody(c.Request.Context(), msg.ID, me.ID, in.Body)
+		if err != nil {
+			if errors.Is(err, store.ErrEditNotApplied) {
+				// Disambiguate the zero-rows case with a cheap follow-up read.
+				fresh, ferr := s.GetMessage(c.Request.Context(), msg.ID)
+				if ferr != nil {
+					if errors.Is(ferr, store.ErrNotFound) {
+						httpx.Fail(c, 404, "message_not_found", "Message not found.")
+						return
+					}
+					httpx.Fail(c, 500, "internal_error", "Could not fetch message.")
+					return
+				}
+				if fresh.DeletedAt != nil {
+					httpx.Fail(c, 404, "message_not_found", "Message not found.")
+					return
+				}
+				if fresh.UserID != me.ID {
+					httpx.Fail(c, 403, "not_message_owner", "You can only edit your own messages.")
+					return
+				}
+				httpx.Fail(c, 409, "edit_window_expired", "This message can no longer be edited (15-minute window expired).")
+				return
+			}
+			httpx.Fail(c, 400, "invalid_message", err.Error())
+			return
+		}
+
+		c.JSON(200, gin.H{"message": publicMessage(updated)})
+
+		pub.Publish(realtime.Event{
+			Type:      "message.updated",
+			Payload:   publicMessage(updated),
+			ChannelID: updated.ChannelID,
+		})
+	}
+}
+
+func messageDelete(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		me, _ := CurrentUser(c)
+
+		msg, ok := loadMessageForMutation(c, s, me.ID)
+		if !ok {
+			return
+		}
+
+		if msg.UserID != me.ID && me.Role != "admin" {
+			httpx.Fail(c, 403, "not_message_owner", "You do not have permission to delete this message.")
+			return
+		}
+
+		deleted, err := s.DeleteMessage(c.Request.Context(), msg.ID, me.ID)
+		if err != nil {
+			httpx.Fail(c, 500, "internal_error", "Could not delete message.")
+			return
+		}
+
+		c.JSON(200, gin.H{"message": publicMessage(deleted)})
+
+		var deletedByVal any = nil
+		if deleted.DeletedBy != nil {
+			deletedByVal = gin.H{
+				"id":      strconv.FormatInt(*deleted.DeletedBy, 10),
+				"is_self": *deleted.DeletedBy == deleted.UserID,
+			}
+		}
+		payload := gin.H{
+			"id":         strconv.FormatInt(deleted.ID, 10),
+			"channel_id": strconv.FormatInt(deleted.ChannelID, 10),
+			"thread_id":  nil,
+			"deleted_by": deletedByVal,
+		}
+		if deleted.ThreadID != nil {
+			payload["thread_id"] = strconv.FormatInt(*deleted.ThreadID, 10)
+		}
+		pub.Publish(realtime.Event{
+			Type:      "message.deleted",
+			Payload:   payload,
+			ChannelID: deleted.ChannelID,
 		})
 	}
 }

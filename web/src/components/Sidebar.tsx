@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { api, type DM } from '../lib/api'
+import { api, type Channel, type DM } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useUiStore } from '../store/ui'
 import { wsClient, type ConnectionState } from '../lib/ws'
@@ -74,6 +74,8 @@ export function Sidebar() {
   const [dmMenuId, setDmMenuId] = useState<string | null>(null)
   const [newMessageOpen, setNewMessageOpen] = useState(false)
   const queryClient = useQueryClient()
+  const location = useLocation()
+  const navigate = useNavigate()
   const channelsQuery = useQuery({ queryKey: ['channels'], queryFn: api.listChannels })
   const dmsQuery = useQuery({ queryKey: ['dms'], queryFn: api.listDMs })
   const unreadsQuery = useQuery({ queryKey: ['unreads'], queryFn: api.unreadSummary })
@@ -108,16 +110,24 @@ export function Sidebar() {
     window.location.href = '/login'
   }
 
-  async function leaveChannel(channelId: string) {
+  async function leaveChannel(channel: Channel) {
     setLeaveMenuId(null)
-    await api.leaveChannel(channelId)
+    const wasOpen = location.pathname === `/c/${channel.slug}`
+    await api.leaveChannel(channel.id)
     await queryClient.invalidateQueries({ queryKey: ['channels'] })
+    // Navigate away immediately rather than leaving the main pane to render whatever empty
+    // state ChannelView falls back to for a channel that just vanished out from under it.
+    if (wasOpen) navigate('/')
   }
 
-  async function removeConversation(channelId: string) {
+  async function removeConversation(dm: DM) {
     setDmMenuId(null)
-    await api.hideDM(channelId)
+    const wasOpen =
+      location.pathname === `/dm/id/${dm.id}` ||
+      (dm.kind === 'dm' && dm.peer && location.pathname === `/dm/${dm.peer.username}`)
+    await api.hideDM(dm.id)
     await queryClient.invalidateQueries({ queryKey: ['dms'] })
+    if (wasOpen) navigate('/')
   }
 
   return (
@@ -232,7 +242,7 @@ export function Sidebar() {
               </NavLink>
               {leaveMenuId === c.id && (
                 <PopoverMenu anchorClassName="right-0 top-full mt-1" onClose={() => setLeaveMenuId(null)}>
-                  <MenuItem onClick={() => leaveChannel(c.id)} danger>
+                  <MenuItem onClick={() => leaveChannel(c)} danger>
                     Leave channel
                   </MenuItem>
                 </PopoverMenu>
@@ -315,7 +325,7 @@ export function Sidebar() {
               </NavLink>
               {dmMenuId === d.id && (
                 <PopoverMenu anchorClassName="right-0 top-full mt-1" onClose={() => setDmMenuId(null)}>
-                  <MenuItem onClick={() => removeConversation(d.id)} danger>
+                  <MenuItem onClick={() => removeConversation(d)} danger>
                     Remove conversation
                   </MenuItem>
                 </PopoverMenu>

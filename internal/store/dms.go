@@ -34,6 +34,15 @@ func (s *Store) GetOrCreateDM(ctx context.Context, a, b int64) (ChannelDetails, 
 			if errSelect != nil {
 				return fmt.Errorf("insert dm channel failed: %w", err)
 			}
+			// Resolving to an existing DM un-hides it for the caller — otherwise a
+			// conversation hidden via HideConversation stays excluded from ListDMs even
+			// after the caller explicitly reopens it here, leaving the client navigated to
+			// a channel id it can never find in its DM list.
+			if _, err = tx.ExecContext(ctx, `
+				UPDATE channel_members SET hidden_at = NULL
+				WHERE channel_id = ? AND user_id = ? AND hidden_at IS NOT NULL`, existID, a); err != nil {
+				return fmt.Errorf("unhide dm channel: %w", err)
+			}
 			channel, err = getChannelTx(ctx, tx, existID)
 			return err
 		}
@@ -137,6 +146,13 @@ func (s *Store) GetOrCreateGroupDM(ctx context.Context, userIDs []int64) (Channe
 			errSelect := tx.QueryRowContext(ctx, "SELECT id FROM channels WHERE dm_key = ?", key).Scan(&existID)
 			if errSelect != nil {
 				return fmt.Errorf("insert group dm channel failed: %w", err)
+			}
+			// Same unhide-on-resolve as GetOrCreateDM, for the caller only (unique[0] — see
+			// dmCreate, which always prepends the requesting user's id before deduping).
+			if _, err = tx.ExecContext(ctx, `
+				UPDATE channel_members SET hidden_at = NULL
+				WHERE channel_id = ? AND user_id = ? AND hidden_at IS NOT NULL`, existID, unique[0]); err != nil {
+				return fmt.Errorf("unhide group dm channel: %w", err)
 			}
 			channel, err = getChannelTx(ctx, tx, existID)
 			return err
@@ -244,8 +260,10 @@ func joinNames(names []string) string {
 // ListDMs returns the DM and group DM channels the user belongs to, with peer/member user
 // objects inlined. It only includes conversations with at least one message OR created in
 // the last hour, so opening a DM and not sending doesn't clutter the list forever. A
-// conversation the caller has hidden via HideConversation is excluded until its next
-// message arrives (CreateMessage clears hidden_at for every member at that point).
+// conversation the caller has hidden via HideConversation is excluded until either a new
+// message arrives (CreateMessage clears hidden_at for every member) or the caller resolves
+// the same DM/group DM again via GetOrCreateDM/GetOrCreateGroupDM (which clears hidden_at for
+// the caller only).
 func (s *Store) ListDMs(ctx context.Context, userID int64) ([]ChannelDetails, error) {
 	cutoffTime := nowMillis() - (60 * 60 * 1000) // 1 hour ago in milliseconds
 
@@ -439,9 +457,11 @@ func (s *Store) RecentDMPartners(ctx context.Context, userID int64, limit int) (
 // HideConversation removes a DM or group DM from the caller's sidebar without touching
 // membership or any message data: it stamps that user's channel_members row with
 // hidden_at. The conversation reappears automatically the next time a message is posted
-// to it (CreateMessage clears hidden_at for every member), and it never affects the other
-// participants' view. Returns ErrNotFound if the caller isn't a member of a dm/group_dm
-// channel with that id.
+// to it (CreateMessage clears hidden_at for every member), or as soon as the caller resolves
+// it again via GetOrCreateDM/GetOrCreateGroupDM (e.g. starting a "new" conversation with the
+// same person from the New Message modal) — and it never affects the other participants'
+// view. Returns ErrNotFound if the caller isn't a member of a dm/group_dm channel with that
+// id.
 func (s *Store) HideConversation(ctx context.Context, userID, channelID int64) error {
 	var kind string
 	err := s.reader.QueryRowContext(ctx, "SELECT kind FROM channels WHERE id = ?", channelID).Scan(&kind)
