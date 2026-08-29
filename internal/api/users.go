@@ -55,7 +55,7 @@ func userGet(s *store.Store) gin.HandlerFunc {
 		c.JSON(200, gin.H{"user": publicUser(u)})
 	}
 }
-func userMe(s *store.Store) gin.HandlerFunc {
+func userMe(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
@@ -100,6 +100,10 @@ func userMe(s *store.Store) gin.HandlerFunc {
 			return
 		}
 		c.JSON(200, gin.H{"user": publicUser(updated)})
+
+		if in.DisplayName != nil || avatarProvided {
+			pub.Publish(realtime.Event{Type: "user.updated", UserID: u.ID})
+		}
 	}
 }
 func userCreate(s *store.Store) gin.HandlerFunc {

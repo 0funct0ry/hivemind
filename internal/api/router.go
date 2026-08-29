@@ -121,7 +121,7 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.DELETE("/tokens/:id", tokenDelete(s))
 	v1.GET("/users", userList(s, h))
 	v1.GET("/users/:id", userGet(s))
-	v1.PATCH("/users/me", userMe(s))
+	v1.PATCH("/users/me", userMe(s, h))
 	v1.POST("/users", RequireAdmin(), userCreate(s))
 	v1.POST("/users/:id/deactivate", RequireAdmin(), userDeactivate(s))
 
@@ -143,6 +143,8 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.PATCH("/messages/:id", messageUpdate(s, h))
 	v1.DELETE("/messages/:id", messageDelete(s, h))
 	v1.GET("/messages/:id/replies", messageListReplies(s))
+	v1.POST("/messages/:id/reactions", reactionAdd(s, h))
+	v1.DELETE("/messages/:id/reactions/:emoji", reactionRemove(s, h))
 
 	v1.GET("/dms", dmList(s, h))
 	v1.POST("/dms", dmCreate(s, h))

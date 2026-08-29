@@ -25,6 +25,15 @@ interface MessageDeletedPayload {
   thread_id: string | null
 }
 
+interface ReactionChangedPayload {
+  message_id: string
+  channel_id: string
+  thread_id: string | null
+  emoji: string
+  user_id: string
+  action: 'added' | 'removed'
+}
+
 interface TypingPayload {
   channel_id: string
   user_id: string
@@ -34,6 +43,10 @@ interface TypingPayload {
 interface PresenceChangedPayload {
   user_id: string
   online: boolean
+}
+
+interface UserUpdatedPayload {
+  user_id: string
 }
 
 /**
@@ -78,6 +91,11 @@ export function useRealtimeSync() {
       // the thread panel derives its locked state from the refetched root's deleted_at.
       queryClient.invalidateQueries({ queryKey: ['thread', p.thread_id ?? p.id] })
     })
+    const offReaction = wsClient.on('reaction.changed', (payload) => {
+      const p = payload as ReactionChangedPayload
+      queryClient.invalidateQueries({ queryKey: ['messages', p.channel_id] })
+      if (p.thread_id) queryClient.invalidateQueries({ queryKey: ['thread', p.thread_id] })
+    })
     const offRead = wsClient.on('read.updated', invalidate(['unreads']))
     const offChannel = wsClient.on('channel.created', invalidate(['channels']))
     const offChannelUpdated = wsClient.on('channel.updated', invalidate(['channels']))
@@ -87,6 +105,13 @@ export function useRealtimeSync() {
     const offTyping = wsClient.on('typing', (payload) => {
       const p = payload as TypingPayload
       setTyping(p.channel_id, { userId: p.user_id, name: p.user_id, expiresAt: p.expires_at })
+    })
+    const offUserUpdated = wsClient.on('user.updated', (payload) => {
+      const p = payload as UserUpdatedPayload
+      // Every message/thread avatar and name resolves live from this one cache entry
+      // (useUserProfile) rather than a snapshot embedded at fetch time, so invalidating it
+      // here is enough to refresh every already-rendered message by this author at once.
+      queryClient.invalidateQueries({ queryKey: ['user', p.user_id] })
     })
     const offPresence = wsClient.on('presence.changed', (payload) => {
       const p = payload as PresenceChangedPayload
@@ -106,6 +131,7 @@ export function useRealtimeSync() {
       offThread()
       offMessageUpdated()
       offMessageDeleted()
+      offReaction()
       offRead()
       offChannel()
       offChannelUpdated()
@@ -113,6 +139,7 @@ export function useRealtimeSync() {
       offMemberLeft()
       offMention()
       offTyping()
+      offUserUpdated()
       offPresence()
       wsClient.close()
     }

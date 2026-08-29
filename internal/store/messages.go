@@ -29,6 +29,7 @@ type Message struct {
 	EditedAt       *int64       `json:"edited_at"`
 	DeletedAt      *int64       `json:"deleted_at"`
 	DeletedBy      *int64       `json:"deleted_by"`
+	Reactions      []Reaction   `json:"reactions"`
 	CreatedAt      int64        `json:"created_at"`
 }
 
@@ -764,6 +765,24 @@ func (s *Store) HydrateMessages(ctx context.Context, messages []Message) error {
 		}
 		if err := rows.Err(); err != nil {
 			return err
+		}
+	}
+
+	// 3. Hydrate Reactions
+	allIDs := make([]int64, len(messages))
+	byID := make(map[int64]*Message, len(messages))
+	for i := range messages {
+		messages[i].Reactions = []Reaction{}
+		allIDs[i] = messages[i].ID
+		byID[messages[i].ID] = &messages[i]
+	}
+	reactionsByMessage, err := s.getReactionsForMessages(ctx, allIDs)
+	if err != nil {
+		return err
+	}
+	for id, reactions := range reactionsByMessage {
+		if m, ok := byID[id]; ok {
+			m.Reactions = reactions
 		}
 	}
 

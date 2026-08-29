@@ -3,17 +3,22 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api, type Attachment, type Message, type MessageUser } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
-import { useDeleteMessage, useMessages } from '../hooks/useMessages'
+import { useDeleteMessage, useMessages, useToggleReaction } from '../hooks/useMessages'
 import { useUiStore } from '../store/ui'
 import { prefersReducedMotion } from '../lib/throttle'
 import { formatTime, formatDay, dayKey, relativeTime } from '../lib/time'
 import { shouldGroup } from '../lib/messageGrouping'
 import { fileTypeAbbrev } from '../lib/fileType'
+import { useUserName, useUserProfile } from '../hooks/useUserName'
 import { Avatar } from './Avatar'
 import { PopoverMenu, MenuItem } from './PopoverMenu'
 import { DeleteMessageDialog } from './DeleteMessageDialog'
+import { EmojiPicker } from './EmojiPicker'
+import { QUICK_REACTIONS } from '../data/emojis'
 
 const EDIT_WINDOW_MS = 15 * 60 * 1000
+const REACTION_SPAM_WINDOW_MS = 2000
+const REACTION_SPAM_MAX_CLICKS = 3
 
 /** Chooses the deleted-message placeholder line from who's looking and who deleted it (SPEC §6.4). */
 function deletedPlaceholder(message: Message, currentUserId?: string): string {
@@ -67,6 +72,21 @@ function AttachmentView({ att }: { att: Attachment }) {
   )
 }
 
+/** A single thread-strip face, resolving its avatar live (see `useUserProfile`) rather than
+ * from the possibly-stale snapshot embedded in the cached thread-preview reply. */
+function ThreadFaceAvatar({ user }: { user: MessageUser }) {
+  const profile = useUserProfile(user.id, user)
+  return (
+    <Avatar
+      name={profile.displayName}
+      color={profile.avatarColor}
+      avatarUrl={profile.avatarUrl}
+      size={18}
+      className="-ml-1.5 border border-paper first:ml-0"
+    />
+  )
+}
+
 function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void }) {
   const { data } = useQuery({
     queryKey: ['thread-preview', message.id],
@@ -77,17 +97,12 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
 
   if (message.reply_count <= 0) return null
 
-  const faces: { id: string; color: string; name: string; avatarUrl?: string }[] = []
+  const faces: MessageUser[] = []
   const seen = new Set<string>()
   for (const reply of data?.data ?? []) {
     if (!reply.user || seen.has(reply.user.id)) continue
     seen.add(reply.user.id)
-    faces.push({
-      id: reply.user.id,
-      color: reply.user.avatar_color,
-      name: reply.user.display_name || reply.user.username,
-      avatarUrl: reply.user.avatar_url,
-    })
+    faces.push(reply.user)
     if (faces.length >= 3) break
   }
 
@@ -100,7 +115,7 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
       {faces.length > 0 && (
         <span className="flex">
           {faces.map((f) => (
-            <Avatar key={f.id} name={f.name} color={f.color} avatarUrl={f.avatarUrl} size={18} className="-ml-1.5 border border-paper first:ml-0" />
+            <ThreadFaceAvatar key={f.id} user={f} />
           ))}
         </span>
       )}
@@ -112,6 +127,138 @@ function ThreadStrip({ message, onOpen }: { message: Message; onOpen: () => void
   )
 }
 
+/** A single reactor name resolved for a badge tooltip: "You" for the current user, the display
+ * name otherwise, or "[Deactivated Member]" for a deactivated reactor (SPEC.md §6.4). */
+function ReactorName({ userId, currentUserId }: { userId: string; currentUserId?: string }) {
+  const userQuery = useQuery({ queryKey: ['user', userId], queryFn: () => api.getUser(userId), staleTime: Infinity })
+  const name = useUserName(userId)
+  if (userId === currentUserId) return <>You</>
+  if (userQuery.data?.user.status === 'deactivated') return <>[Deactivated Member]</>
+  return <>{name}</>
+}
+
+function ReactionTooltip({ userIds, currentUserId }: { userIds: string[]; currentUserId?: string }) {
+  const ordered = currentUserId && userIds.includes(currentUserId) ? [currentUserId, ...userIds.filter((id) => id !== currentUserId)] : userIds
+  return (
+    <span className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-rule bg-paper px-2 py-1 text-xs text-ink shadow-lg group-hover/badge:block">
+      {ordered.map((id, i) => (
+        <span key={id}>
+          {i > 0 && ', '}
+          <ReactorName userId={id} currentUserId={currentUserId} />
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/** The row of emoji pill badges below a message's body — one per distinct reaction, ordered by
+ * first-applied time (server-side, SPEC.md §4.3). Exported so ThreadPanel can render the same
+ * badges for the root/replies it renders outside MessageList. */
+export function ReactionBadges({
+  message,
+  currentUserId,
+  threadId,
+}: {
+  message: Message
+  currentUserId?: string
+  threadId?: string
+}) {
+  const toggle = useToggleReaction(message.channel_id, currentUserId)
+  const clickTimes = useRef<Map<string, number[]>>(new Map())
+
+  if (message.reactions.length === 0) return null
+
+  const handleToggle = (emoji: string, active: boolean) => {
+    const now = Date.now()
+    const times = (clickTimes.current.get(emoji) ?? []).filter((t) => now - t < REACTION_SPAM_WINDOW_MS)
+    if (times.length >= REACTION_SPAM_MAX_CLICKS) return
+    times.push(now)
+    clickTimes.current.set(emoji, times)
+
+    toggle.mutate({ messageId: message.id, emoji, action: active ? 'remove' : 'add', threadId })
+  }
+
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {message.reactions.map((r) => {
+        const active = !!currentUserId && r.user_ids.includes(currentUserId)
+        return (
+          <button
+            key={r.emoji}
+            type="button"
+            onClick={() => handleToggle(r.emoji, active)}
+            className={
+              'group/badge relative flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs ' +
+              (active ? 'border-teal bg-teal-soft text-teal' : 'border-rule bg-paper text-ink-2 hover:bg-paper-3')
+            }
+          >
+            <span>{r.emoji}</span>
+            <span className="font-mono text-[10px]">{r.user_ids.length}</span>
+            <ReactionTooltip userIds={r.user_ids} currentUserId={currentUserId} />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** The hover-revealed quick-reaction row (SPEC.md §6.4's 6 fixed shortcuts plus a "+" that
+ * opens the full picker). */
+function QuickReactions({
+  message,
+  currentUserId,
+  threadId,
+}: {
+  message: Message
+  currentUserId?: string
+  threadId?: string
+}) {
+  const toggle = useToggleReaction(message.channel_id, currentUserId)
+  const [pickerOpen, setPickerOpen] = useState(false)
+
+  const react = (emoji: string) => {
+    toggle.mutate({ messageId: message.id, emoji, action: 'add', threadId })
+  }
+
+  return (
+    <div className="flex items-center gap-0.5">
+      {QUICK_REACTIONS.map((emoji) => (
+        <button
+          key={emoji}
+          type="button"
+          title={`React with ${emoji}`}
+          aria-label={`React with ${emoji}`}
+          onClick={() => react(emoji)}
+          className="rounded px-1 py-0.5 text-sm hover:bg-paper-3"
+        >
+          {emoji}
+        </button>
+      ))}
+      <span className="relative">
+        <button
+          type="button"
+          title="Add reaction"
+          aria-label="Add reaction"
+          onClick={() => setPickerOpen((v) => !v)}
+          className="px-1.5 py-1 text-ink-3 hover:text-ink"
+        >
+          +
+        </button>
+        {pickerOpen && (
+          <EmojiPicker
+            anchorClassName="right-0 top-full mt-1"
+            onSelect={(emoji) => {
+              react(emoji)
+              setPickerOpen(false)
+            }}
+            onDismiss={() => setPickerOpen(false)}
+          />
+        )}
+      </span>
+    </div>
+  )
+}
+
 /** Clicking an avatar or display name opens a small popover — name, bot/role badge, presence,
  * and a Message button that starts (or reopens) a 1:1 DM with that person. */
 function ProfilePopoverTrigger({ user, children }: { user: MessageUser; children: React.ReactNode }) {
@@ -120,7 +267,8 @@ function ProfilePopoverTrigger({ user, children }: { user: MessageUser; children
   const queryClient = useQueryClient()
   const presenceQuery = useQuery({ queryKey: ['presence'], queryFn: api.getPresence })
   const online = new Set(presenceQuery.data?.online ?? [])
-  const name = user.display_name || user.username
+  const profile = useUserProfile(user.id, user)
+  const name = profile.displayName
 
   async function message() {
     setOpen(false)
@@ -138,11 +286,11 @@ function ProfilePopoverTrigger({ user, children }: { user: MessageUser; children
         <PopoverMenu anchorClassName="left-0 top-full mt-1" onClose={() => setOpen(false)}>
           <div className="min-w-[200px] p-3">
             <div className="flex items-center gap-2">
-              <Avatar name={name} color={user.avatar_color} avatarUrl={user.avatar_url} size={30} />
+              <Avatar name={name} color={profile.avatarColor} avatarUrl={profile.avatarUrl} size={30} />
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-sm font-semibold text-ink">{name}</span>
-                  {user.is_bot && <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>}
+                  {profile.isBot && <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>}
                 </div>
                 <div className="flex items-center gap-1.5 text-[11px] text-ink-3">
                   <span
@@ -175,21 +323,22 @@ function MessageActions({
   message,
   canEdit,
   canDelete,
+  currentUserId,
   onEdit,
 }: {
   message: Message
   canEdit: boolean
   canDelete: boolean
+  currentUserId?: string
   onEdit: () => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const deleteMutation = useDeleteMessage(message.channel_id)
 
-  if (!canEdit && !canDelete) return null
-
   return (
     <div className="absolute right-3 top-0 hidden items-center gap-0.5 rounded-md border border-rule bg-paper shadow-sm group-hover:flex">
+      <QuickReactions message={message} currentUserId={currentUserId} />
       {canEdit && (
         <button
           type="button"
@@ -254,7 +403,8 @@ function MessageRow({
   onOpenThread: (id: string) => void
   onEditMessage: (message: Message) => void
 }) {
-  const name = message.user?.display_name || message.user?.username || 'Unknown'
+  const profile = useUserProfile(message.user_id, message.user)
+  const name = message.user ? profile.displayName : 'Unknown'
 
   if (message.deleted_at) {
     return (
@@ -265,7 +415,7 @@ function MessageRow({
         }
       >
         <div className="flex items-start justify-center pt-1">
-          {grouped ? null : <Avatar name={name} color={message.user?.avatar_color ?? '#999'} size={30} />}
+          {grouped ? null : <Avatar name={name} color={profile.avatarColor} avatarUrl={profile.avatarUrl} size={30} />}
         </div>
         <div>
           {!grouped && (
@@ -300,7 +450,7 @@ function MessageRow({
           </time>
         ) : message.user ? (
           <ProfilePopoverTrigger user={message.user}>
-            <Avatar name={name} color={message.user.avatar_color} avatarUrl={message.user.avatar_url} size={30} />
+            <Avatar name={name} color={profile.avatarColor} avatarUrl={profile.avatarUrl} size={30} />
           </ProfilePopoverTrigger>
         ) : (
           <Avatar name={name} color="#999" size={30} />
@@ -316,7 +466,7 @@ function MessageRow({
             ) : (
               <b className="font-display text-sm font-semibold text-ink">{name}</b>
             )}
-            {message.user?.is_bot && (
+            {profile.isBot && (
               <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>
             )}
             <time className="font-mono text-[11px] text-ink-3">{formatTime(message.created_at)}</time>
@@ -338,12 +488,14 @@ function MessageRow({
             Didn&apos;t send — <span className="cursor-pointer underline">retry</span>
           </div>
         )}
+        <ReactionBadges message={message} currentUserId={currentUserId} />
         <ThreadStrip message={message} onOpen={() => onOpenThread(message.id)} />
       </div>
       <MessageActions
         message={message}
         canEdit={canEdit}
         canDelete={canDelete}
+        currentUserId={currentUserId}
         onEdit={() => onEditMessage(message)}
       />
     </div>

@@ -68,6 +68,15 @@ func publicMessage(m store.Message) gin.H {
 		}
 	}
 
+	reactions := make([]gin.H, 0, len(m.Reactions))
+	for _, r := range m.Reactions {
+		userIDs := make([]string, 0, len(r.UserIDs))
+		for _, uid := range r.UserIDs {
+			userIDs = append(userIDs, strconv.FormatInt(uid, 10))
+		}
+		reactions = append(reactions, gin.H{"emoji": r.Emoji, "user_ids": userIDs})
+	}
+
 	atts := make([]gin.H, 0, len(m.Attachments))
 	for _, a := range m.Attachments {
 		attVal := gin.H{
@@ -112,6 +121,7 @@ func publicMessage(m store.Message) gin.H {
 		"created_at":      m.CreatedAt,
 		"client_msg_id":   m.ClientMsgID,
 		"mentions":        []any{},
+		"reactions":       reactions,
 	}
 	if m.ThreadID != nil {
 		res["thread_id"] = strconv.FormatInt(*m.ThreadID, 10)

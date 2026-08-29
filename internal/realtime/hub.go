@@ -220,6 +220,11 @@ func (h *Hub) handlePublish(ctx context.Context, ev Event) {
 		return
 	}
 
+	if ev.Type == "user.updated" {
+		h.publishUserUpdated(ctx, ev.UserID)
+		return
+	}
+
 	// Invalidate membership cache on member changes or channel archive/deletes
 	if ev.Type == "member.joined" || ev.Type == "member.left" || ev.Type == "channel.created" || ev.Type == "channel.updated" {
 		h.mu.Lock()
@@ -317,6 +322,35 @@ func (h *Hub) publishPresence(ctx context.Context, userID int64) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, peerID := range peers {
+		if conns, ok := h.conns[peerID]; ok {
+			for _, conn := range conns {
+				conn.Send(frame)
+			}
+		}
+	}
+}
+
+// publishUserUpdated fans out a user.updated event for userID to every user who shares at
+// least one channel with them, plus the user's own other sessions (so a second open tab/device
+// picks up the change too) — the same ChannelPeersOf-backed audience publishPresence already
+// resolves, since a profile change is exactly as broad in scope as a presence change.
+func (h *Hub) publishUserUpdated(ctx context.Context, userID int64) {
+	payloadBytes, err := json.Marshal(UserUpdatedPayload{UserID: strconv.FormatInt(userID, 10)})
+	if err != nil {
+		slog.Error("failed to marshal user.updated payload", "user_id", userID, "error", err)
+		return
+	}
+	frame := Frame{V: 1, Type: "user.updated", TS: time.Now().UnixMilli(), Payload: payloadBytes}
+
+	peers, err := h.store.ChannelPeersOf(ctx, userID)
+	if err != nil {
+		slog.Error("failed to resolve user.updated audience", "user_id", userID, "error", err)
+		return
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, peerID := range append(peers, userID) {
 		if conns, ok := h.conns[peerID]; ok {
 			for _, conn := range conns {
 				conn.Send(frame)

@@ -47,7 +47,7 @@ internal-docs/
 node_modules/
 web/dist/
 docs/dist/
-data/
+/data/
 
 # internal/web/dist holds the built frontend, go:embed'd into the binary.
 # Keep a placeholder index.html tracked so the package compiles on a fresh

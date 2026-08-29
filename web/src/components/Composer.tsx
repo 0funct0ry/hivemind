@@ -5,6 +5,7 @@ import { useUiStore } from '../store/ui'
 import { wsClient } from '../lib/ws'
 import { throttle } from '../lib/throttle'
 import { MentionPicker, useMentionCandidates } from './MentionPicker'
+import { EmojiPicker } from './EmojiPicker'
 import { fileTypeAbbrev } from '../lib/fileType'
 
 const EDIT_WINDOW_MS = 15 * 60 * 1000
@@ -48,6 +49,9 @@ export const Composer = forwardRef<
   const [alsoSendToChannel, setAlsoSendToChannel] = useState(false)
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [mentionStart, setMentionStart] = useState(0)
+  const [shortcodeQuery, setShortcodeQuery] = useState<string | null>(null)
+  const [shortcodeStart, setShortcodeStart] = useState(0)
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
   const [editing, setEditing] = useState<{ id: string } | null>(null)
   const [stashedDraft, setStashedDraft] = useState<string | null>(null)
   const [editBanner, setEditBanner] = useState<string | null>(null)
@@ -107,12 +111,21 @@ export const Composer = forwardRef<
 
     const cursor = textareaRef.current?.selectionStart ?? value.length
     const upToCursor = value.slice(0, cursor)
-    const match = /@([a-z0-9._-]*)$/i.exec(upToCursor)
-    if (match) {
-      setMentionQuery(match[1])
-      setMentionStart(cursor - match[1].length - 1)
+    const mentionMatch = /@([a-z0-9._-]*)$/i.exec(upToCursor)
+    if (mentionMatch) {
+      setMentionQuery(mentionMatch[1])
+      setMentionStart(cursor - mentionMatch[1].length - 1)
+      setShortcodeQuery(null)
+      return
+    }
+    setMentionQuery(null)
+
+    const shortcodeMatch = /:([a-z0-9_+-]{2,})$/i.exec(upToCursor)
+    if (shortcodeMatch) {
+      setShortcodeQuery(shortcodeMatch[1])
+      setShortcodeStart(cursor - shortcodeMatch[1].length - 1)
     } else {
-      setMentionQuery(null)
+      setShortcodeQuery(null)
     }
   }
 
@@ -157,6 +170,33 @@ export const Composer = forwardRef<
     setBody(next)
     persistDraft(next)
     setMentionQuery(null)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  /** Inserts an emoji at the textarea's current cursor position — not appended to the end of
+   * the draft — used by the 🙂 toolbar button (SPEC.md §6.5). */
+  const insertEmojiAtCursor = (emoji: string) => {
+    const ta = textareaRef.current
+    const cursor = ta?.selectionStart ?? body.length
+    const next = `${body.slice(0, cursor)}${emoji}${body.slice(cursor)}`
+    setBody(next)
+    persistDraft(next)
+    setEmojiPickerOpen(false)
+    const newCursor = cursor + emoji.length
+    requestAnimationFrame(() => {
+      ta?.focus()
+      ta?.setSelectionRange(newCursor, newCursor)
+    })
+  }
+
+  /** Replaces the typed `:shortcode` text (including the leading `:`) with the emoji character
+   * plus a trailing space, mirroring insertMention's replace-at-trigger-point behavior. */
+  const insertShortcodeEmoji = (emoji: string) => {
+    const cursor = textareaRef.current?.selectionStart ?? body.length
+    const next = `${body.slice(0, shortcodeStart)}${emoji} ${body.slice(cursor)}`
+    setBody(next)
+    persistDraft(next)
+    setShortcodeQuery(null)
     requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
@@ -242,6 +282,9 @@ export const Composer = forwardRef<
     if (mentionQuery !== null && ['ArrowDown', 'ArrowUp', 'Tab', 'Enter', 'Escape'].includes(e.key)) {
       return
     }
+    if (shortcodeQuery !== null && ['ArrowLeft', 'ArrowRight', 'ArrowDown', 'ArrowUp', 'Tab', 'Enter', 'Escape'].includes(e.key)) {
+      return
+    }
     if (e.key === 'Escape' && editing) {
       e.preventDefault()
       cancelEdit()
@@ -265,6 +308,15 @@ export const Composer = forwardRef<
           candidates={mentionCandidates}
           onSelect={(c) => insertMention(c.key)}
           onDismiss={() => setMentionQuery(null)}
+        />
+      )}
+      {shortcodeQuery !== null && (
+        <EmojiPicker
+          anchorClassName="bottom-full left-2 mb-1"
+          initialQuery={shortcodeQuery}
+          autoFocusSearch={false}
+          onSelect={insertShortcodeEmoji}
+          onDismiss={() => setShortcodeQuery(null)}
         />
       )}
       {editing && !editBanner && (
@@ -344,6 +396,24 @@ export const Composer = forwardRef<
             >
               @
             </button>
+            <span className="relative">
+              <button
+                type="button"
+                title="Insert emoji"
+                aria-label="Insert emoji"
+                onClick={() => setEmojiPickerOpen((v) => !v)}
+                className="px-1 text-ink-3 hover:text-ink"
+              >
+                🙂
+              </button>
+              {emojiPickerOpen && (
+                <EmojiPicker
+                  anchorClassName="bottom-full left-0 mb-1"
+                  onSelect={insertEmojiAtCursor}
+                  onDismiss={() => setEmojiPickerOpen(false)}
+                />
+              )}
+            </span>
             <button
               type="button"
               title="Code block"

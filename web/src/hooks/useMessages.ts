@@ -68,6 +68,7 @@ export function useSendMessage(channelId: string | undefined) {
         created_at: Date.now(),
         client_msg_id: input.clientMsgId,
         mentions: [],
+        reactions: [],
         status: 'sending',
       }
       const key = input.threadId ? ['thread', input.threadId] : ['messages', channelId]
@@ -107,6 +108,92 @@ export function useDeleteMessage(channelId: string | undefined) {
     onSuccess: () => {
       if (channelId) queryClient.invalidateQueries({ queryKey: ['messages', channelId] })
       queryClient.invalidateQueries({ queryKey: ['thread'] })
+    },
+  })
+}
+
+interface ToggleReactionInput {
+  messageId: string
+  emoji: string
+  action: 'add' | 'remove'
+  threadId?: string
+}
+
+/** Applies `updater` to a message's `reactions` array wherever it appears — the channel's
+ * infinite message pages, and the open thread's data, if any — since a message shown in both
+ * places is patched by the same event/mutation with no shared object identity to key on. */
+function patchMessageReactions(
+  queryClient: ReturnType<typeof useQueryClient>,
+  channelId: string | undefined,
+  threadId: string | undefined,
+  messageId: string,
+  updater: (m: Message) => Message,
+) {
+  if (channelId) {
+    queryClient.setQueryData(['messages', channelId], (old: unknown) => {
+      const infinite = old as { pages: Array<{ data: Message[] }> } | undefined
+      if (!infinite) return infinite
+      return {
+        ...infinite,
+        pages: infinite.pages.map((p) => ({
+          ...p,
+          data: p.data.map((m) => (m.id === messageId ? updater(m) : m)),
+        })),
+      }
+    })
+  }
+  if (threadId) {
+    queryClient.setQueryData(['thread', threadId], (old: unknown) => {
+      const t = old as { root: Message; data: Message[] } | undefined
+      if (!t) return t
+      return {
+        ...t,
+        root: t.root.id === messageId ? updater(t.root) : t.root,
+        data: t.data.map((m) => (m.id === messageId ? updater(m) : m)),
+      }
+    })
+  }
+}
+
+function applyReactionToggle(m: Message, emoji: string, userId: string, action: 'add' | 'remove'): Message {
+  const reactions = m.reactions.map((r) => ({ ...r, user_ids: [...r.user_ids] }))
+  const existing = reactions.find((r) => r.emoji === emoji)
+  if (action === 'add') {
+    if (existing) {
+      if (!existing.user_ids.includes(userId)) existing.user_ids.push(userId)
+    } else {
+      reactions.push({ emoji, user_ids: [userId] })
+    }
+  } else if (existing) {
+    existing.user_ids = existing.user_ids.filter((id) => id !== userId)
+  }
+  return { ...m, reactions: reactions.filter((r) => r.user_ids.length > 0) }
+}
+
+export function useToggleReaction(channelId: string | undefined, currentUserId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (input: ToggleReactionInput) =>
+      input.action === 'add' ? api.addReaction(input.messageId, input.emoji) : api.removeReaction(input.messageId, input.emoji),
+    onMutate: (input) => {
+      if (!currentUserId) return
+      patchMessageReactions(queryClient, channelId, input.threadId, input.messageId, (m) =>
+        applyReactionToggle(m, input.emoji, currentUserId, input.action),
+      )
+    },
+    onError: (_err, input) => {
+      if (!currentUserId) return
+      // Revert by applying the inverse action — good enough for a single-user toggle undo,
+      // and avoids snapshotting the entire cache shape just for this one mutation.
+      const inverse = input.action === 'add' ? 'remove' : 'add'
+      patchMessageReactions(queryClient, channelId, input.threadId, input.messageId, (m) =>
+        applyReactionToggle(m, input.emoji, currentUserId, inverse),
+      )
+    },
+    onSuccess: (_data, input) => {
+      if (channelId) queryClient.invalidateQueries({ queryKey: ['messages', channelId] })
+      if (input.threadId) queryClient.invalidateQueries({ queryKey: ['thread', input.threadId] })
     },
   })
 }

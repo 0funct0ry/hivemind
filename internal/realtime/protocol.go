@@ -63,3 +63,12 @@ type PresencePayload struct {
 	UserID string `json:"user_id"`
 	Online bool   `json:"online"`
 }
+
+// UserUpdatedPayload announces that a user's profile (display name or avatar) changed, to
+// everyone who shares a channel with them plus their own other sessions. It carries only the
+// id — clients already have a client-side cache keyed by user id (the same one author
+// hydration and reaction tooltips read from) and simply invalidate it, refetching the current
+// profile over REST, rather than duplicating the full user shape onto every event.
+type UserUpdatedPayload struct {
+	UserID string `json:"user_id"`
+}

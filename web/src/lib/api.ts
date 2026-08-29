@@ -94,6 +94,7 @@ export interface Message {
   created_at: number
   client_msg_id: string | null
   mentions: unknown[]
+  reactions: { emoji: string; user_ids: string[] }[]
   /** Client-only: present while an optimistic send is in flight or has failed. */
   status?: 'sending' | 'failed'
 }
@@ -240,6 +241,15 @@ export const api = {
   updateMessage: (id: string, body: string) =>
     request<{ message: Message }>(`/messages/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
   deleteMessage: (id: string) => request<{ message: Message }>(`/messages/${id}`, { method: 'DELETE' }),
+  addReaction: (messageId: string, emoji: string) =>
+    request<{ reactions: Message['reactions'] }>(`/messages/${messageId}/reactions`, {
+      method: 'POST',
+      body: JSON.stringify({ emoji }),
+    }),
+  removeReaction: (messageId: string, emoji: string) =>
+    request<{ reactions: Message['reactions'] }>(`/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`, {
+      method: 'DELETE',
+    }),
   listReplies: (rootId: string, params: { after?: string; limit?: number } = {}) => {
     const qs = new URLSearchParams()
     if (params.after) qs.set('after', params.after)

@@ -725,3 +725,277 @@ func TestMessageMutationEvents(t *testing.T) {
 		}
 	}
 }
+
+// TestReactionChangedEvent verifies reaction.changed fans out to every channel member's
+// connection (including the actor's own), with the correct action, and that a connection in a
+// different channel receives nothing.
+func TestReactionChangedEvent(t *testing.T) {
+	api.DisableRateLimits = true
+	defer func() { api.DisableRateLimits = false }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	a := auth.New(s, 24*time.Hour)
+	cfg := config.Config{WorkspaceName: "Test Workspace"}
+	r := api.NewRouter(s, a, cfg)
+
+	u1, _ := s.CreateUser(ctx, store.UserInput{Username: "reactuser1", Email: "react1@example.com", PasswordHash: "hash"})
+	u2, _ := s.CreateUser(ctx, store.UserInput{Username: "reactuser2", Email: "react2@example.com", PasswordHash: "hash"})
+	u3, _ := s.CreateUser(ctx, store.UserInput{Username: "reactuser3", Email: "react3@example.com", PasswordHash: "hash"})
+
+	s1, _ := a.CreateSession(ctx, u1.ID, "UA", "127.0.0.1")
+	s2, _ := a.CreateSession(ctx, u2.ID, "UA", "127.0.0.1")
+	s3, _ := a.CreateSession(ctx, u3.ID, "UA", "127.0.0.1")
+
+	ch, err := s.CreateChannel(ctx, "public", "reaction-events", "Reaction Events", "", u1.ID, []int64{u1.ID, u2.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherCh, err := s.CreateChannel(ctx, "public", "reaction-events-other", "Other", "", u3.ID, []int64{u3.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/ws"
+
+	dialWS := func(sessionID string) *websocket.Conn {
+		headers := http.Header{}
+		headers.Set("Cookie", "hm_session="+sessionID)
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
+		if err != nil {
+			t.Fatalf("failed to dial websocket: %v", err)
+		}
+		return conn
+	}
+
+	ws1 := dialWS(s1)
+	defer ws1.Close()
+	var f1 realtime.Frame
+	_ = ws1.ReadJSON(&f1) // hello
+
+	ws2 := dialWS(s2)
+	defer ws2.Close()
+	var f2 realtime.Frame
+	_ = ws2.ReadJSON(&f2) // hello
+
+	ws3 := dialWS(s3)
+	defer ws3.Close()
+	var f3 realtime.Frame
+	_ = ws3.ReadJSON(&f3) // hello
+
+	client := &http.Client{}
+	doRequest := func(method, path, sessionID string, body any) (int, string) {
+		var reqBody io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			reqBody = bytes.NewReader(b)
+		}
+		req, _ := http.NewRequest(method, srv.URL+path, reqBody)
+		req.Header.Set("Cookie", "hm_session="+sessionID)
+		req.Header.Set("Origin", srv.URL)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	readFrameWithTimeout := func(ws *websocket.Conn, timeout time.Duration) (realtime.Frame, error) {
+		_ = ws.SetReadDeadline(time.Now().Add(timeout))
+		var f realtime.Frame
+		err := ws.ReadJSON(&f)
+		return f, err
+	}
+
+	code, resp := doRequest("POST", "/api/v1/channels/"+strconv.FormatInt(ch.ID, 10)+"/messages", s1, map[string]string{"body": "react to this"})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d. Body: %s", code, resp)
+	}
+	var created struct {
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(resp), &created); err != nil {
+		t.Fatal(err)
+	}
+	for _, ws := range []*websocket.Conn{ws1, ws2} {
+		f, err := readFrameWithTimeout(ws, time.Second)
+		if err != nil || f.Type != "message.created" {
+			t.Fatalf("expected message.created, got %+v err=%v", f, err)
+		}
+	}
+
+	// u3, unrelated to this channel, posts in their own channel so we can assert isolation later.
+	code, resp = doRequest("POST", "/api/v1/channels/"+strconv.FormatInt(otherCh.ID, 10)+"/messages", s3, map[string]string{"body": "unrelated"})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d. Body: %s", code, resp)
+	}
+	if _, err := readFrameWithTimeout(ws3, time.Second); err != nil {
+		t.Fatalf("expected message.created echo on ws3: %v", err)
+	}
+
+	// Add a reaction: both channel members must see reaction.changed{action:"added"}.
+	code, resp = doRequest("POST", "/api/v1/messages/"+created.Message.ID+"/reactions", s1, map[string]string{"emoji": "🚀"})
+	if code != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", code, resp)
+	}
+	for i, ws := range []*websocket.Conn{ws1, ws2} {
+		f, err := readFrameWithTimeout(ws, time.Second)
+		if err != nil || f.Type != "reaction.changed" {
+			t.Fatalf("connection %d: expected reaction.changed, got %+v err=%v", i, f, err)
+		}
+		var payload struct {
+			Action string `json:"action"`
+			Emoji  string `json:"emoji"`
+		}
+		if err := json.Unmarshal(f.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Action != "added" || payload.Emoji != "🚀" {
+			t.Fatalf("connection %d: expected action=added emoji=🚀, got %+v", i, payload)
+		}
+	}
+
+	// A connection in a different channel receives nothing for this reaction.
+	if _, err := readFrameWithTimeout(ws3, 200*time.Millisecond); err == nil {
+		t.Fatal("expected no frame on ws3 (different channel), but got one")
+	}
+
+	// Remove the reaction: both members see reaction.changed{action:"removed"}.
+	code, resp = doRequest("DELETE", "/api/v1/messages/"+created.Message.ID+"/reactions/%F0%9F%9A%80", s1, nil)
+	if code != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", code, resp)
+	}
+	for i, ws := range []*websocket.Conn{ws1, ws2} {
+		f, err := readFrameWithTimeout(ws, time.Second)
+		if err != nil || f.Type != "reaction.changed" {
+			t.Fatalf("connection %d: expected reaction.changed, got %+v err=%v", i, f, err)
+		}
+		var payload struct {
+			Action string `json:"action"`
+		}
+		if err := json.Unmarshal(f.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Action != "removed" {
+			t.Fatalf("connection %d: expected action=removed, got %+v", i, payload)
+		}
+	}
+}
+
+// TestUserUpdatedEvent verifies user.updated fans out to a channel peer and to the updating
+// user's own other session when a profile PATCH changes the display name or avatar. There is no
+// negative "unrelated user receives nothing" case here — every store.CreateUser auto-joins
+// #general (internal/store/users.go), so any two users in the same test store always share at
+// least one channel and are legitimately in each other's ChannelPeersOf audience; the same
+// reason TestPresenceChangedEvent, which this test's shape otherwise mirrors, has no such case.
+func TestUserUpdatedEvent(t *testing.T) {
+	api.DisableRateLimits = true
+	defer func() { api.DisableRateLimits = false }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	a := auth.New(s, 24*time.Hour)
+	cfg := config.Config{WorkspaceName: "Test Workspace"}
+	r := api.NewRouter(s, a, cfg)
+
+	u1, _ := s.CreateUser(ctx, store.UserInput{Username: "profileuser1", Email: "profile1@example.com", PasswordHash: "hash"})
+	u2, _ := s.CreateUser(ctx, store.UserInput{Username: "profileuser2", Email: "profile2@example.com", PasswordHash: "hash"})
+
+	s1a, _ := a.CreateSession(ctx, u1.ID, "UA", "127.0.0.1")
+	s1b, _ := a.CreateSession(ctx, u1.ID, "UA", "127.0.0.1")
+	s2, _ := a.CreateSession(ctx, u2.ID, "UA", "127.0.0.1")
+
+	if _, err := s.CreateChannel(ctx, "private", "profile-chan", "Profile Channel", "", u1.ID, []int64{u1.ID, u2.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/ws"
+
+	dialWS := func(sessionID string) *websocket.Conn {
+		headers := http.Header{}
+		headers.Set("Cookie", "hm_session="+sessionID)
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
+		if err != nil {
+			t.Fatalf("failed to dial websocket: %v", err)
+		}
+		return conn
+	}
+
+	// u1's second session, u1's channel peer, and the unrelated u3.
+	wsSelf := dialWS(s1b)
+	defer wsSelf.Close()
+	var fSelf realtime.Frame
+	_ = wsSelf.ReadJSON(&fSelf) // hello
+
+	wsPeer := dialWS(s2)
+	defer wsPeer.Close()
+	var fPeer realtime.Frame
+	_ = wsPeer.ReadJSON(&fPeer) // hello
+
+	readFrameWithTimeout := func(ws *websocket.Conn, timeout time.Duration) (realtime.Frame, error) {
+		_ = ws.SetReadDeadline(time.Now().Add(timeout))
+		var f realtime.Frame
+		err := ws.ReadJSON(&f)
+		return f, err
+	}
+
+	client := &http.Client{}
+	req, _ := http.NewRequest("PATCH", srv.URL+"/api/v1/users/me", bytes.NewReader([]byte(`{"display_name":"New Name"}`)))
+	req.Header.Set("Cookie", "hm_session="+s1a)
+	req.Header.Set("Origin", srv.URL)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, body)
+	}
+
+	for name, ws := range map[string]*websocket.Conn{"self-other-session": wsSelf, "channel-peer": wsPeer} {
+		f, err := readFrameWithTimeout(ws, time.Second)
+		if err != nil || f.Type != "user.updated" {
+			t.Fatalf("%s: expected user.updated, got %+v err=%v", name, f, err)
+		}
+		var payload realtime.UserUpdatedPayload
+		if err := json.Unmarshal(f.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.UserID != strconv.FormatInt(u1.ID, 10) {
+			t.Fatalf("%s: expected user_id=%d, got %+v", name, u1.ID, payload)
+		}
+	}
+}

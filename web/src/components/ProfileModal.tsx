@@ -47,6 +47,11 @@ export function ProfileModal({
     try {
       await api.updateMe(patch)
       await qc.invalidateQueries({ queryKey: ['auth', 'me'] })
+      // ['user', id] is the cache MessageList/ThreadPanel resolve authors' live avatar/name
+      // from (useUserProfile) — distinct from ['auth','me'], so it needs its own invalidation
+      // or this user's own already-rendered messages would only pick up the change once the
+      // user.updated WS echo round-trips back.
+      await qc.invalidateQueries({ queryKey: ['user', user.id] })
       if (patch.display_name !== undefined) setEdit(false)
       if (patch.avatar_file_id !== undefined) setPhotoSaved(true)
     } catch (e) {
@@ -67,6 +72,7 @@ export function ProfileModal({
       const uploaded = await api.uploadAvatar(file)
       await api.updateMe({ avatar_file_id: uploaded.id })
       await qc.invalidateQueries({ queryKey: ['auth', 'me'] })
+      await qc.invalidateQueries({ queryKey: ['user', user.id] })
       setPhotoSaved(true)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not upload photo.')
