@@ -35,6 +35,30 @@ export interface Channel {
   joined: boolean
 }
 
+// AdminSession is a CLI login session — an api_tokens row hivemind chat auto-mints after
+// login (purpose=cli_session), the CLI equivalent of a browser session cookie. Distinct from
+// APIToken below, which is a user's own deliberately-created personal API key.
+export interface AdminSession {
+  id: string
+  name: string
+  username: string
+  display_name: string
+  created_at: number
+  expires_at?: number
+  last_used_at?: number
+  disabled: boolean
+}
+
+// APIToken is a personal API key a user deliberately created for their own bots/scripts/
+// integrations (self-service, purpose=api_key) — never the CLI's auto-minted session token.
+export interface APIToken {
+  id: string
+  name: string
+  created_at: number
+  expires_at?: number
+  last_used_at?: number
+}
+
 export interface DM {
   id: string
   kind: 'dm' | 'group_dm'
@@ -287,4 +311,17 @@ export const api = {
       xhr.send(form)
     }),
   uploadAvatar: (file: File) => api.uploadFile(file),
+
+  // Admin-only: CLI login sessions across every user (purpose=cli_session).
+  adminListSessions: () => request<{ data: AdminSession[] }>('/admin/sessions'),
+  adminDisableSession: (id: string) => request<void>(`/admin/sessions/${id}/disable`, { method: 'POST' }),
+  adminEnableSession: (id: string) => request<void>(`/admin/sessions/${id}/enable`, { method: 'POST' }),
+  adminRotateSession: (id: string) => request<{ token: string }>(`/admin/sessions/${id}/rotate`, { method: 'POST' }),
+  adminRevokeSession: (id: string) => request<void>(`/admin/sessions/${id}`, { method: 'DELETE' }),
+
+  // Self-service, any user: personal API keys (purpose=api_key, defaulted server-side).
+  listMyTokens: () => request<{ data: APIToken[] }>('/tokens'),
+  createMyToken: (body: { name: string; expires_in?: string }) =>
+    request<{ id: string; name: string; token: string }>('/tokens', { method: 'POST', body: JSON.stringify(body) }),
+  deleteMyToken: (id: string) => request<void>(`/tokens/${id}`, { method: 'DELETE' }),
 }

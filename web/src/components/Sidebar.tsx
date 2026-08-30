@@ -369,6 +369,25 @@ export function Sidebar() {
               <MenuItem onClick={() => openProfile('view')}>View profile</MenuItem>
               <MenuItem onClick={() => openProfile('edit')}>Edit profile</MenuItem>
               <div className="my-1 h-px bg-rule" />
+              <MenuItem
+                onClick={() => {
+                  setFooterMenuOpen(false)
+                  navigate('/api-keys')
+                }}
+              >
+                API keys
+              </MenuItem>
+              {auth.user.role === 'admin' && (
+                <MenuItem
+                  onClick={() => {
+                    setFooterMenuOpen(false)
+                    navigate('/admin/sessions')
+                  }}
+                >
+                  Sessions
+                </MenuItem>
+              )}
+              <div className="my-1 h-px bg-rule" />
               <MenuItem onClick={logout} danger>
                 Log out
               </MenuItem>

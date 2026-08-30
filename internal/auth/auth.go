@@ -130,23 +130,49 @@ func (s *Service) AuthenticateToken(ctx context.Context, plaintext string) (stor
 	return s.Store.AuthenticateAPIToken(ctx, hex.EncodeToString(sum[:]), s.now())
 }
 
-// CreateToken creates an API token and returns its plaintext once.
-func (s *Service) CreateToken(ctx context.Context, userID int64, name string, expires time.Duration) (int64, string, error) {
+// newTokenSecret generates a fresh "hm_<random>" plaintext token secret and its SHA-256 hash,
+// shared by CreateToken and RotateToken so the two never drift on format.
+func (s *Service) newTokenSecret() (secret, hash string, err error) {
 	b := make([]byte, 20)
 	if _, err := io.ReadFull(s.Random, b); err != nil {
-		return 0, "", fmt.Errorf("random API token: %w", err)
+		return "", "", fmt.Errorf("random API token: %w", err)
 	}
-	secret := "hm_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)
+	secret = "hm_" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)
 	sum := sha256.Sum256([]byte(secret))
+	return secret, hex.EncodeToString(sum[:]), nil
+}
+
+// CreateToken creates an API token of the given purpose (store.TokenPurposeAPIKey for a
+// self-service personal key, store.TokenPurposeCLISession for hivemind chat's auto-minted
+// login token) and returns its plaintext once.
+func (s *Service) CreateToken(ctx context.Context, userID int64, name string, expires time.Duration, purpose string) (int64, string, error) {
+	secret, hash, err := s.newTokenSecret()
+	if err != nil {
+		return 0, "", err
+	}
 	expiresAt := int64(0)
 	if expires > 0 {
 		expiresAt = s.now() + expires.Milliseconds()
 	}
-	id, err := s.Store.CreateAPIToken(ctx, userID, name, hex.EncodeToString(sum[:]), s.now(), expiresAt)
+	id, err := s.Store.CreateAPIToken(ctx, userID, name, hash, s.now(), expiresAt, purpose)
 	if err != nil {
 		return 0, "", err
 	}
 	return id, secret, nil
+}
+
+// RotateToken generates a fresh secret for an existing token id of the given purpose and
+// returns the new plaintext once, for admin use — the previous plaintext stops authenticating
+// immediately.
+func (s *Service) RotateToken(ctx context.Context, id int64, purpose string) (string, error) {
+	secret, hash, err := s.newTokenSecret()
+	if err != nil {
+		return "", err
+	}
+	if err := s.Store.RotateAPIToken(ctx, id, hash, s.now(), purpose); err != nil {
+		return "", err
+	}
+	return secret, nil
 }
 
 // ChangePassword validates and changes a password, revoking all sessions.

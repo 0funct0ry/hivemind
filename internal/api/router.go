@@ -125,6 +125,16 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.POST("/users", RequireAdmin(), userCreate(s))
 	v1.POST("/users/:id/deactivate", RequireAdmin(), userDeactivate(s))
 
+	// /admin/sessions manages CLI login sessions (api_tokens rows hivemind chat auto-mints
+	// after login, purpose=cli_session) — distinct from /tokens above, which is every user's
+	// own deliberately-created personal API keys (purpose=api_key). Never conflate the two:
+	// every handler below is hard-scoped to store.TokenPurposeCLISession.
+	v1.GET("/admin/sessions", RequireAdmin(), adminSessionList(s))
+	v1.POST("/admin/sessions/:id/disable", RequireAdmin(), adminSessionDisable(s))
+	v1.POST("/admin/sessions/:id/enable", RequireAdmin(), adminSessionEnable(s))
+	v1.POST("/admin/sessions/:id/rotate", RequireAdmin(), adminSessionRotate(a))
+	v1.DELETE("/admin/sessions/:id", RequireAdmin(), adminSessionRevoke(s))
+
 	v1.GET("/channels", channelList(s))
 	v1.POST("/channels", channelCreate(s))
 	v1.GET("/channels/:id", channelGet(s))
@@ -320,10 +330,16 @@ func password(a *auth.Service, cfg config.Config) gin.HandlerFunc {
 		c.Status(204)
 	}
 }
+
+// tokenList/tokenCreate/tokenDelete are the self-service "my API keys" endpoints — every user,
+// regardless of role, manages only their own tokens here. They are hard-scoped to
+// store.TokenPurposeAPIKey so a user's own hivemind-chat CLI session token (auto-minted by
+// tokenCreate itself, just with a different purpose) never shows up in or can be deleted from
+// this list — that's the admin-only Sessions view's job.
 func tokenList(s *store.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u, _ := CurrentUser(c)
-		v, err := s.ListAPITokens(c.Request.Context(), u.ID)
+		v, err := s.ListAPITokens(c.Request.Context(), u.ID, store.TokenPurposeAPIKey)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not list tokens.")
 			return
@@ -342,12 +358,20 @@ func tokenList(s *store.Store) gin.HandlerFunc {
 		c.JSON(200, gin.H{"data": data})
 	}
 }
+
+// tokenCreate is used both by the self-service API-keys UI (no "purpose" in the request body,
+// defaults to an api_key) and internally by hivemind chat's login flow, which explicitly
+// requests "purpose":"cli_session" right after minting its own session cookie so its
+// auto-created token is filed as a session rather than a personal API key. Either way the
+// caller is only ever creating a token for themselves — purpose is a UI-routing label, not a
+// privilege boundary.
 func tokenCreate(a *auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u, _ := CurrentUser(c)
 		var in struct {
 			Name      string `json:"name"`
 			ExpiresIn string `json:"expires_in"`
+			Purpose   string `json:"purpose"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
 			httpx.Fail(c, 400, "invalid_request", "Invalid request payload: "+err.Error())
@@ -356,6 +380,14 @@ func tokenCreate(a *auth.Service) gin.HandlerFunc {
 		if in.Name == "" {
 			httpx.Fail(c, 400, "invalid_request", "Token name is required.")
 			return
+		}
+		purpose := store.TokenPurposeAPIKey
+		if in.Purpose != "" {
+			if in.Purpose != store.TokenPurposeAPIKey && in.Purpose != store.TokenPurposeCLISession {
+				httpx.FailField(c, 400, "invalid_request", "purpose must be api_key or cli_session.", "purpose")
+				return
+			}
+			purpose = in.Purpose
 		}
 		var d time.Duration
 		var err error
@@ -366,7 +398,7 @@ func tokenCreate(a *auth.Service) gin.HandlerFunc {
 				return
 			}
 		}
-		id, plain, err := a.CreateToken(c.Request.Context(), u.ID, in.Name, d)
+		id, plain, err := a.CreateToken(c.Request.Context(), u.ID, in.Name, d, purpose)
 		if err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not create token.")
 			return
@@ -382,12 +414,126 @@ func tokenDelete(s *store.Store) gin.HandlerFunc {
 			httpx.Fail(c, 404, "not_found", "Token not found.")
 			return
 		}
-		if err := s.DeleteAPIToken(c.Request.Context(), u.ID, id); err != nil {
+		if err := s.DeleteAPIToken(c.Request.Context(), u.ID, id, store.TokenPurposeAPIKey); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				httpx.Fail(c, 404, "not_found", "Token not found.")
 				return
 			}
 			httpx.Fail(c, 500, "internal_error", "Could not delete token.")
+			return
+		}
+		c.Status(204)
+	}
+}
+
+// adminSessionID parses the :id param, writing the shared 404 response on failure. Callers
+// should return immediately when ok is false.
+func adminSessionID(c *gin.Context) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		httpx.Fail(c, 404, "not_found", "Session not found.")
+		return 0, false
+	}
+	return id, true
+}
+
+// publicAdminSession renders an admin-facing CLI-session listing entry — owner identity plus
+// lifecycle metadata, but never the hash or plaintext secret.
+func publicAdminSession(t store.APITokenWithOwner) gin.H {
+	item := gin.H{
+		"id":           strconv.FormatInt(t.ID, 10),
+		"name":         t.Name,
+		"username":     t.Username,
+		"display_name": t.DisplayName,
+		"created_at":   t.CreatedAt,
+		"disabled":     t.DisabledAt != nil,
+	}
+	if t.ExpiresAt != 0 {
+		item["expires_at"] = t.ExpiresAt
+	}
+	if t.LastUsedAt != 0 {
+		item["last_used_at"] = t.LastUsedAt
+	}
+	return item
+}
+func adminSessionList(s *store.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		v, err := s.ListAllAPITokens(c.Request.Context(), store.TokenPurposeCLISession)
+		if err != nil {
+			httpx.Fail(c, 500, "internal_error", "Could not list sessions.")
+			return
+		}
+		data := make([]gin.H, 0, len(v))
+		for _, t := range v {
+			data = append(data, publicAdminSession(t))
+		}
+		c.JSON(200, gin.H{"data": data})
+	}
+}
+func adminSessionDisable(s *store.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := adminSessionID(c)
+		if !ok {
+			return
+		}
+		if err := s.DisableAPIToken(c.Request.Context(), id, time.Now().UnixMilli(), store.TokenPurposeCLISession); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				httpx.Fail(c, 404, "not_found", "Session not found.")
+				return
+			}
+			httpx.Fail(c, 500, "internal_error", "Could not disable session.")
+			return
+		}
+		c.Status(204)
+	}
+}
+func adminSessionEnable(s *store.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := adminSessionID(c)
+		if !ok {
+			return
+		}
+		if err := s.EnableAPIToken(c.Request.Context(), id, store.TokenPurposeCLISession); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				httpx.Fail(c, 404, "not_found", "Session not found.")
+				return
+			}
+			httpx.Fail(c, 500, "internal_error", "Could not enable session.")
+			return
+		}
+		c.Status(204)
+	}
+}
+func adminSessionRotate(a *auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := adminSessionID(c)
+		if !ok {
+			return
+		}
+		plain, err := a.RotateToken(c.Request.Context(), id, store.TokenPurposeCLISession)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				httpx.Fail(c, 404, "not_found", "Session not found.")
+				return
+			}
+			httpx.Fail(c, 500, "internal_error", "Could not rotate session.")
+			return
+		}
+		c.JSON(200, gin.H{"token": plain})
+	}
+}
+func adminSessionRevoke(s *store.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := adminSessionID(c)
+		if !ok {
+			return
+		}
+		if err := s.AdminDeleteAPIToken(c.Request.Context(), id, store.TokenPurposeCLISession); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				httpx.Fail(c, 404, "not_found", "Session not found.")
+				return
+			}
+			httpx.Fail(c, 500, "internal_error", "Could not revoke session.")
 			return
 		}
 		c.Status(204)
