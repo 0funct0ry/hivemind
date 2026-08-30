@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -122,12 +123,20 @@ func publicMessage(m store.Message) gin.H {
 		"client_msg_id":   m.ClientMsgID,
 		"mentions":        []any{},
 		"reactions":       reactions,
+		"webhook_id":      m.WebhookID,
+		"card":            nil,
 	}
 	if m.ThreadID != nil {
 		res["thread_id"] = strconv.FormatInt(*m.ThreadID, 10)
 	}
 	if m.LastReplyID != nil {
 		res["last_reply_id"] = strconv.FormatInt(*m.LastReplyID, 10)
+	}
+	if m.Card != nil {
+		var card any
+		if err := json.Unmarshal([]byte(*m.Card), &card); err == nil {
+			res["card"] = card
+		}
 	}
 	return res
 }

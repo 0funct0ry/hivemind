@@ -31,6 +31,8 @@ type Message struct {
 	DeletedBy      *int64       `json:"deleted_by"`
 	Reactions      []Reaction   `json:"reactions"`
 	CreatedAt      int64        `json:"created_at"`
+	WebhookID      *string      `json:"webhook_id"`
+	Card           *string      `json:"card"`
 }
 
 // Attachment represents a file attached to a message.
@@ -54,6 +56,10 @@ type MessageInput struct {
 	FileIDs     []string
 	Broadcast   bool
 	IsOnline    func(userID int64) bool
+	// WebhookID and Card are set only when this message is authored by a webhook
+	// (internal/store's CreateWebhookMessage) — ordinary human/CLI/bot posts leave both nil.
+	WebhookID *string
+	Card      *string
 }
 
 var (
@@ -171,20 +177,20 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 		}
 
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO messages (channel_id, user_id, thread_id, body, client_msg_id, has_attachments, broadcast, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			in.ChannelID, in.UserID, in.ThreadID, body, in.ClientMsgID, hasAttachments, broadcastVal, now)
+			INSERT INTO messages (channel_id, user_id, thread_id, body, client_msg_id, has_attachments, broadcast, created_at, webhook_id, card)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			in.ChannelID, in.UserID, in.ThreadID, body, in.ClientMsgID, hasAttachments, broadcastVal, now, in.WebhookID, in.Card)
 		if err != nil {
 			if isUniqueConstraintError(err) && in.ClientMsgID != nil {
 				existed = true
 				var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal, deletedByVal sql.NullInt64
-				var clientMsgIDVal sql.NullString
+				var clientMsgIDVal, webhookIDVal, cardVal sql.NullString
 				err = tx.QueryRowContext(ctx, `
-					SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, deleted_by, created_at
+					SELECT id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, deleted_by, created_at, webhook_id, card
 					FROM messages
 					WHERE user_id = ? AND client_msg_id = ?`,
 					in.UserID, *in.ClientMsgID).Scan(
-					&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt)
+					&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt, &webhookIDVal, &cardVal)
 				if err != nil {
 					return fmt.Errorf("fetch existing message: %w", err)
 				}
@@ -205,6 +211,12 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 				}
 				if deletedByVal.Valid {
 					msg.DeletedBy = &deletedByVal.Int64
+				}
+				if webhookIDVal.Valid {
+					msg.WebhookID = &webhookIDVal.String
+				}
+				if cardVal.Valid {
+					msg.Card = &cardVal.String
 				}
 				return nil
 			}
@@ -372,6 +384,8 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 		msg.Broadcast = in.Broadcast
 		msg.HasAttachments = len(in.FileIDs) > 0
 		msg.CreatedAt = now
+		msg.WebhookID = in.WebhookID
+		msg.Card = in.Card
 		return nil
 	})
 
@@ -392,12 +406,12 @@ func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bo
 func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	var msg Message
 	var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal, deletedByVal sql.NullInt64
-	var clientMsgIDVal sql.NullString
+	var clientMsgIDVal, webhookIDVal, cardVal sql.NullString
 	err := s.reader.QueryRowContext(ctx, `
 		SELECT `+channelMessageColumns+`
 		FROM messages
 		WHERE id = ?`, id).Scan(
-		&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt)
+		&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt, &webhookIDVal, &cardVal)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Message{}, ErrNotFound
@@ -422,6 +436,12 @@ func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	if deletedByVal.Valid {
 		msg.DeletedBy = &deletedByVal.Int64
 	}
+	if webhookIDVal.Valid {
+		msg.WebhookID = &webhookIDVal.String
+	}
+	if cardVal.Valid {
+		msg.Card = &cardVal.String
+	}
 
 	messages := []Message{msg}
 	if err := s.HydrateMessages(ctx, messages); err != nil {
@@ -430,7 +450,7 @@ func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	return messages[0], nil
 }
 
-const channelMessageColumns = `id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, deleted_by, created_at`
+const channelMessageColumns = `id, channel_id, user_id, thread_id, body, client_msg_id, reply_count, last_reply_id, has_attachments, broadcast, edited_at, deleted_at, deleted_by, created_at, webhook_id, card`
 
 // queryChannelMessages runs a channel-message query and scans the results, unhydrated.
 func (s *Store) queryChannelMessages(ctx context.Context, query string, args ...any) ([]Message, error) {
@@ -444,9 +464,9 @@ func (s *Store) queryChannelMessages(ctx context.Context, query string, args ...
 	for rows.Next() {
 		var msg Message
 		var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal, deletedByVal sql.NullInt64
-		var clientMsgIDVal sql.NullString
+		var clientMsgIDVal, webhookIDVal, cardVal sql.NullString
 		err := rows.Scan(
-			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt)
+			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt, &webhookIDVal, &cardVal)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
@@ -467,6 +487,12 @@ func (s *Store) queryChannelMessages(ctx context.Context, query string, args ...
 		}
 		if deletedByVal.Valid {
 			msg.DeletedBy = &deletedByVal.Int64
+		}
+		if webhookIDVal.Valid {
+			msg.WebhookID = &webhookIDVal.String
+		}
+		if cardVal.Valid {
+			msg.Card = &cardVal.String
 		}
 		messages = append(messages, msg)
 	}
@@ -617,9 +643,9 @@ func (s *Store) ListReplies(ctx context.Context, rootID int64, after *int64, lim
 	for rows.Next() {
 		var msg Message
 		var threadIDVal, lastReplyIDVal, editedAtVal, deletedAtVal, deletedByVal sql.NullInt64
-		var clientMsgIDVal sql.NullString
+		var clientMsgIDVal, webhookIDVal, cardVal sql.NullString
 		err := rows.Scan(
-			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt)
+			&msg.ID, &msg.ChannelID, &msg.UserID, &threadIDVal, &msg.Body, &clientMsgIDVal, &msg.ReplyCount, &lastReplyIDVal, &msg.HasAttachments, &msg.Broadcast, &editedAtVal, &deletedAtVal, &deletedByVal, &msg.CreatedAt, &webhookIDVal, &cardVal)
 		if err != nil {
 			return nil, fmt.Errorf("scan reply message: %w", err)
 		}
@@ -640,6 +666,12 @@ func (s *Store) ListReplies(ctx context.Context, rootID int64, after *int64, lim
 		}
 		if deletedByVal.Valid {
 			msg.DeletedBy = &deletedByVal.Int64
+		}
+		if webhookIDVal.Valid {
+			msg.WebhookID = &webhookIDVal.String
+		}
+		if cardVal.Valid {
+			msg.Card = &cardVal.String
 		}
 		replies = append(replies, msg)
 	}

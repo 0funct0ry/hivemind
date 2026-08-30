@@ -111,6 +111,10 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	v1.POST("/auth/login", login(s, a, cfg, lim))
 	v1.POST("/setup", setupCreate(s, a, b))
+	// Public secret-in-path ingest endpoint (SPEC.md §4.10): no ambient credential to protect,
+	// so it lives outside the session/CSRF-gated group below, exactly like /auth/login and
+	// /setup above.
+	v1.POST("/webhooks/:id/ingest/:token", webhookIngest(s, h))
 	v1.Use(b.gate(s))
 	v1.Use(RequireAuth(a, cfg))
 	v1.POST("/auth/logout", sessionOnly, logout(a, cfg))
@@ -159,6 +163,15 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/dms", dmList(s, h))
 	v1.POST("/dms", dmCreate(s, h))
 	v1.POST("/dms/:id/hide", dmHide(s))
+
+	v1.GET("/webhooks", webhookList(s))
+	v1.GET("/channels/:id/webhooks", channelWebhookList(s))
+	v1.POST("/channels/:id/webhooks", channelWebhookCreate(s))
+	v1.GET("/webhooks/:id", webhookGet(s))
+	v1.PATCH("/webhooks/:id", webhookUpdate(s))
+	v1.DELETE("/webhooks/:id", webhookDelete(s))
+	v1.POST("/webhooks/:id/regenerate", webhookRegenerate(s))
+	v1.POST("/webhooks/:id/claim", RequireAdmin(), webhookClaim(s))
 
 	v1.GET("/search", search(s))
 	v1.GET("/unreads", unreadSummary(s))

@@ -180,6 +180,19 @@ func (s *Store) Deactivate(ctx context.Context, id int64) error {
 	return nil
 }
 
+// DeactivateAndOrphanWebhooks marks a user inactive and, in the same transaction, flips every
+// active webhook that user owns to status='orphaned' (SPEC.md §4.10's "Deactivated creator"
+// edge case) — the two must be atomic so a crash between them never leaves an active webhook
+// silently owned by a deactivated user.
+func (s *Store) DeactivateAndOrphanWebhooks(ctx context.Context, id int64) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET status='deactivated',updated_at=? WHERE id=?", nowMillis(), id); err != nil {
+			return fmt.Errorf("deactivate user: %w", err)
+		}
+		return s.OrphanWebhooksForUser(ctx, tx, id)
+	})
+}
+
 // Promote makes a user an administrator.
 func (s *Store) Promote(ctx context.Context, id int64) error {
 	if _, err := s.writer.ExecContext(ctx, "UPDATE users SET role='admin',updated_at=? WHERE id=?", nowMillis(), id); err != nil {

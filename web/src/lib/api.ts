@@ -100,6 +100,17 @@ export interface Attachment {
   height?: number
 }
 
+export interface WebhookCard {
+  title: string
+  severity: 'critical' | 'warning' | 'info' | 'success' | 'neutral'
+  fields?: { label: string; value: string }[]
+  body: string
+  display_name?: string
+  avatar_url?: string
+  fallback?: boolean
+  redirect_notice?: boolean
+}
+
 export interface Message {
   id: string
   channel_id: string
@@ -119,6 +130,8 @@ export interface Message {
   client_msg_id: string | null
   mentions: unknown[]
   reactions: { emoji: string; user_ids: string[] }[]
+  webhook_id: string | null
+  card: WebhookCard | null
   /** Client-only: present while an optimistic send is in flight or has failed. */
   status?: 'sending' | 'failed'
 }
@@ -147,6 +160,52 @@ export interface SearchHit {
   message: Message
   channel: SearchChannel
   snippet: string
+}
+
+export interface Webhook {
+  id: string
+  channel_id: string
+  bot_user_id: string
+  created_by: string
+  name: string
+  format_preset: 'generic' | 'slack_compatible'
+  default_display_name: string
+  default_avatar_color: string
+  allow_payload_override: boolean
+  default_severity: 'critical' | 'warning' | 'info' | 'success' | 'neutral'
+  notify_channel_on_critical: boolean
+  thread_id: string | null
+  masked_token: string
+  status: 'active' | 'disabled' | 'orphaned'
+  created_at: number
+  updated_at: number
+  regenerated_at: number | null
+  last_used_at: number | null
+  /** Present only on create/regenerate responses — shown once, never retrievable again. */
+  ingest_url?: string
+}
+
+export interface WebhookCreateBody {
+  name: string
+  format_preset?: 'generic' | 'slack_compatible'
+  default_display_name?: string
+  default_avatar_color?: string
+  allow_payload_override?: boolean
+  default_severity?: string
+  notify_channel_on_critical?: boolean
+  thread_id?: string
+}
+
+export interface WebhookPatchBody {
+  name?: string
+  format_preset?: 'generic' | 'slack_compatible'
+  default_display_name?: string
+  default_avatar_color?: string
+  allow_payload_override?: boolean
+  default_severity?: string
+  notify_channel_on_critical?: boolean
+  thread_id?: string
+  status?: 'active' | 'disabled'
 }
 
 export interface UploadedFile {
@@ -324,4 +383,15 @@ export const api = {
   createMyToken: (body: { name: string; expires_in?: string }) =>
     request<{ id: string; name: string; token: string }>('/tokens', { method: 'POST', body: JSON.stringify(body) }),
   deleteMyToken: (id: string) => request<void>(`/tokens/${id}`, { method: 'DELETE' }),
+
+  // Incoming webhooks (M21): workspace-wide list is scoped server-side to channels the caller
+  // owns (or every channel, for admins); mutation endpoints all enforce owner-or-admin.
+  listWebhooks: () => request<{ data: Webhook[] }>('/webhooks'),
+  createWebhook: (channelId: string, body: WebhookCreateBody) =>
+    request<{ webhook: Webhook }>(`/channels/${channelId}/webhooks`, { method: 'POST', body: JSON.stringify(body) }),
+  updateWebhook: (id: string, body: WebhookPatchBody) =>
+    request<{ webhook: Webhook }>(`/webhooks/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  regenerateWebhook: (id: string) => request<{ webhook: Webhook }>(`/webhooks/${id}/regenerate`, { method: 'POST' }),
+  deleteWebhook: (id: string) => request<{ ok: true }>(`/webhooks/${id}`, { method: 'DELETE' }),
+  claimWebhook: (id: string) => request<{ webhook: Webhook }>(`/webhooks/${id}/claim`, { method: 'POST' }),
 }

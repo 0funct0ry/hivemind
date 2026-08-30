@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { api, type Attachment, type Message, type MessageUser } from '../lib/api'
+import { api, type Attachment, type Message, type MessageUser, type WebhookCard } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
 import { useDeleteMessage, useMessages, useToggleReaction } from '../hooks/useMessages'
 import { useUiStore } from '../store/ui'
@@ -27,6 +27,61 @@ function deletedPlaceholder(message: Message, currentUserId?: string): string {
   if (deletedBy.id === currentUserId) return 'Message deleted (Moderated)'
   if (message.user_id === currentUserId) return 'Your message was deleted by an administrator.'
   return 'This message has been deleted.'
+}
+
+const SEVERITY_ACCENT: Record<WebhookCard['severity'], string> = {
+  critical: 'border-red-600',
+  warning: 'border-pollen',
+  success: 'border-teal',
+  info: 'border-ink-3',
+  neutral: 'border-ink-3',
+}
+
+/** Renders an incoming-webhook message's structured card (SPEC.md §4.10) — a colored-accent
+ * panel with title/fields/body, or a dimmed "unrecognized payload" look when the sender's
+ * payload couldn't be parsed into a card at all. */
+function WebhookCardView({ card }: { card: WebhookCard }) {
+  if (card.fallback) {
+    return (
+      <div className="mt-1 max-w-lg rounded border border-rule bg-paper px-3 py-2 opacity-70">
+        <div className="text-xs font-medium uppercase tracking-wide text-ink-3">{card.title}</div>
+        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-ink-2">
+          {card.body}
+        </pre>
+      </div>
+    )
+  }
+
+  const accent = SEVERITY_ACCENT[card.severity] ?? SEVERITY_ACCENT.neutral
+
+  return (
+    <div className={'mt-1 max-w-lg rounded border border-rule border-l-4 bg-paper px-3 py-2 ' + accent}>
+      {card.redirect_notice && (
+        <div className="mb-2 flex items-center gap-1.5 rounded bg-pollen-soft px-2 py-1 text-xs text-pollen">
+          <span aria-hidden>⚠</span>
+          <span>
+            {(card.fields ?? []).find((f) => f.label === 'Original target')
+              ? `Redirected — original target: ${(card.fields ?? []).find((f) => f.label === 'Original target')?.value}`
+              : 'This alert was redirected from its original target channel.'}
+          </span>
+        </div>
+      )}
+      {card.title && <div className="font-display text-sm font-semibold text-ink">{card.title}</div>}
+      {card.fields && card.fields.length > 0 && (
+        <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1">
+          {card.fields.map((f, i) => (
+            <div key={i} className="min-w-0">
+              <dt className="text-[10px] uppercase tracking-wide text-ink-3">{f.label}</dt>
+              <dd className="truncate text-sm text-ink">{f.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {card.body && (
+        <div className="mt-1.5 text-sm leading-relaxed text-ink">{renderMarkdown(card.body, {})}</div>
+      )}
+    </div>
+  )
 }
 
 function AttachmentView({ att }: { att: Attachment }) {
@@ -480,6 +535,7 @@ function MessageRow({
         <div className="text-sm leading-relaxed text-ink [&_a]:break-all">
           {renderMarkdown(message.body, { currentUsername })}
         </div>
+        {message.card && <WebhookCardView card={message.card} />}
         {message.attachments.map((a) => (
           <AttachmentView key={a.id} att={a} />
         ))}

@@ -3,6 +3,7 @@ import { ChannelView, DmView, DmByIdView, NoChannelSelected } from './routes/Cha
 import { AdminSessions } from './routes/AdminSessions'
 import { ApiKeys } from './routes/ApiKeys'
 import { AppShell } from './routes/AppShell'
+import { Settings } from './routes/Settings'
 import { Login } from './routes/Login'
 import { Setup } from './routes/Setup'
 
@@ -18,6 +19,8 @@ export function App() {
         <Route path="dm/id/:id" element={<DmByIdView />} />
         <Route path="api-keys" element={<ApiKeys />} />
         <Route path="admin/sessions" element={<AdminSessions />} />
+        <Route path="settings" element={<Settings />} />
+        <Route path="settings/webhooks" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

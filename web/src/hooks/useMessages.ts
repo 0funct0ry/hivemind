@@ -69,6 +69,8 @@ export function useSendMessage(channelId: string | undefined) {
         client_msg_id: input.clientMsgId,
         mentions: [],
         reactions: [],
+        webhook_id: null,
+        card: null,
         status: 'sending',
       }
       const key = input.threadId ? ['thread', input.threadId] : ['messages', channelId]

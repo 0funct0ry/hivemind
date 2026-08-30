@@ -167,7 +167,7 @@ func userDeactivate(s *store.Store) gin.HandlerFunc {
 				return
 			}
 		}
-		if err := s.Deactivate(c.Request.Context(), id); err != nil {
+		if err := s.DeactivateAndOrphanWebhooks(c.Request.Context(), id); err != nil {
 			httpx.Fail(c, 500, "internal_error", "Could not deactivate user.")
 			return
 		}

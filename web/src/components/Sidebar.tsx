@@ -377,6 +377,14 @@ export function Sidebar() {
               >
                 API keys
               </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  setFooterMenuOpen(false)
+                  navigate('/settings/webhooks', { state: { from: location.pathname } })
+                }}
+              >
+                Settings
+              </MenuItem>
               {auth.user.role === 'admin' && (
                 <MenuItem
                   onClick={() => {
