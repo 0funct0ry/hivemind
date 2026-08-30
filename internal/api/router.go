@@ -16,6 +16,7 @@ import (
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
 	"github.com/0funct0ry/hivemind/internal/auth"
 	"github.com/0funct0ry/hivemind/internal/config"
+	"github.com/0funct0ry/hivemind/internal/dispatch"
 	"github.com/0funct0ry/hivemind/internal/filestore"
 	"github.com/0funct0ry/hivemind/internal/realtime"
 	"github.com/0funct0ry/hivemind/internal/store"
@@ -108,13 +109,17 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	TestHub = h
 	go h.Run(context.Background())
 
+	// Outgoing-webhook dispatch worker pool (SPEC.md §4.11, M22) — fires message.created events
+	// asynchronously, never on the message-post request goroutine.
+	outgoingDispatcher := dispatch.NewDispatcher(s)
+
 	v1 := r.Group("/api/v1")
 	v1.POST("/auth/login", login(s, a, cfg, lim))
 	v1.POST("/setup", setupCreate(s, a, b))
 	// Public secret-in-path ingest endpoint (SPEC.md §4.10): no ambient credential to protect,
 	// so it lives outside the session/CSRF-gated group below, exactly like /auth/login and
 	// /setup above.
-	v1.POST("/webhooks/:id/ingest/:token", webhookIngest(s, h))
+	v1.POST("/webhooks/:id/ingest/:token", webhookIngest(s, h, outgoingDispatcher))
 	v1.Use(b.gate(s))
 	v1.Use(RequireAuth(a, cfg))
 	v1.POST("/auth/logout", sessionOnly, logout(a, cfg))
@@ -151,7 +156,7 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.GET("/channels/:id/activity", channelActivity(s))
 
 	v1.GET("/channels/:id/messages", messageList(s))
-	v1.POST("/channels/:id/messages", messageCreate(s, h))
+	v1.POST("/channels/:id/messages", messageCreate(s, h, outgoingDispatcher))
 	v1.POST("/channels/:id/read", channelRead(s, h))
 	v1.GET("/messages/:id", messageGet(s))
 	v1.PATCH("/messages/:id", messageUpdate(s, h))
@@ -172,6 +177,16 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.DELETE("/webhooks/:id", webhookDelete(s))
 	v1.POST("/webhooks/:id/regenerate", webhookRegenerate(s))
 	v1.POST("/webhooks/:id/claim", RequireAdmin(), webhookClaim(s))
+
+	v1.GET("/outgoing-webhooks", outgoingWebhookList(s))
+	v1.GET("/channels/:id/outgoing-webhooks", channelOutgoingWebhookList(s))
+	v1.POST("/channels/:id/outgoing-webhooks", channelOutgoingWebhookCreate(s))
+	v1.GET("/outgoing-webhooks/:id", outgoingWebhookGet(s))
+	v1.PATCH("/outgoing-webhooks/:id", outgoingWebhookUpdate(s))
+	v1.DELETE("/outgoing-webhooks/:id", outgoingWebhookDelete(s))
+	v1.POST("/outgoing-webhooks/:id/regenerate-secret", outgoingWebhookRegenerateSecret(s))
+	v1.POST("/outgoing-webhooks/:id/test", outgoingWebhookTest(s))
+	v1.GET("/outgoing-webhooks/:id/deliveries", outgoingWebhookDeliveries(s))
 
 	v1.GET("/search", search(s))
 	v1.GET("/unreads", unreadSummary(s))

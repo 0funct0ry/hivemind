@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
+	"github.com/0funct0ry/hivemind/internal/dispatch"
 	"github.com/0funct0ry/hivemind/internal/realtime"
 	"github.com/0funct0ry/hivemind/internal/store"
 	"github.com/0funct0ry/hivemind/internal/webhooks"
@@ -64,7 +65,7 @@ const maxIngestBodyBytes = 1 << 20 // 1 MiB; generous enough for any legitimate 
 // malformed payload becomes a fallback card) -> CheckWebhookFlood -> either a fresh
 // CreateWebhookMessage+message.created, or an in-place UpdateWebhookFloodSummary+message.updated
 // -> always 200 {ok:true, message_id}.
-func webhookIngest(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
+func webhookIngest(s *store.Store, pub realtime.Publisher, outgoingDispatcher *dispatch.Dispatcher) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 		token := c.Param("token")
@@ -145,6 +146,13 @@ func webhookIngest(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 				Payload:   publicMessage(msg),
 				ChannelID: msg.ChannelID,
 			})
+			if targetCh, err := s.GetChannel(c.Request.Context(), msg.ChannelID); err == nil {
+				channelName := targetCh.Name
+				if targetCh.Slug != nil && *targetCh.Slug != "" {
+					channelName = *targetCh.Slug
+				}
+				enqueueOutgoingWebhooks(s, outgoingDispatcher, msg, channelName)
+			}
 		} else {
 			rootMsg, err := s.GetMessage(c.Request.Context(), *msg.ThreadID)
 			if err == nil {

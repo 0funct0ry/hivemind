@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/0funct0ry/hivemind/internal/api/httpx"
+	"github.com/0funct0ry/hivemind/internal/dispatch"
 	"github.com/0funct0ry/hivemind/internal/realtime"
 	"github.com/0funct0ry/hivemind/internal/store"
 	"github.com/gin-gonic/gin"
@@ -143,7 +144,7 @@ func publicMessage(m store.Message) gin.H {
 
 var createMsgMu sync.Mutex
 
-func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
+func messageCreate(s *store.Store, pub realtime.Publisher, outgoingDispatcher *dispatch.Dispatcher) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		me, _ := CurrentUser(c)
 
@@ -298,6 +299,12 @@ func messageCreate(s *store.Store, pub realtime.Publisher) gin.HandlerFunc {
 					})
 				}
 			}
+
+			channelName := ch.Name
+			if ch.Slug != nil && *ch.Slug != "" {
+				channelName = *ch.Slug
+			}
+			enqueueOutgoingWebhooks(s, outgoingDispatcher, msg, channelName)
 		}
 		createMsgMu.Unlock()
 	}

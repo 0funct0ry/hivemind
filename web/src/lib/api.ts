@@ -208,6 +208,48 @@ export interface WebhookPatchBody {
   status?: 'active' | 'disabled'
 }
 
+export interface OutgoingWebhook {
+  id: string
+  channel_id: string
+  created_by: string
+  name: string
+  target_url: string
+  masked_secret: string
+  event_type: string
+  keyword_filter: string
+  status: 'active' | 'disabled' | 'unhealthy'
+  consecutive_failures: number
+  created_at: number
+  updated_at: number
+  last_triggered_at: number | null
+  last_success_at: number | null
+  /** Present only on create/regenerate responses — shown once, never retrievable again. */
+  secret?: string
+}
+
+export interface OutgoingWebhookCreateBody {
+  name: string
+  target_url: string
+  keyword_filter?: string
+}
+
+export interface OutgoingWebhookPatchBody {
+  name?: string
+  target_url?: string
+  keyword_filter?: string
+  status?: 'active' | 'disabled'
+}
+
+export interface WebhookDelivery {
+  id: string
+  message_id?: string
+  attempt_number: number
+  response_status: number | null
+  response_body_snippet: string
+  latency_ms: number | null
+  created_at: number
+}
+
 export interface UploadedFile {
   id: string
   sha256: string
@@ -394,4 +436,26 @@ export const api = {
   regenerateWebhook: (id: string) => request<{ webhook: Webhook }>(`/webhooks/${id}/regenerate`, { method: 'POST' }),
   deleteWebhook: (id: string) => request<{ ok: true }>(`/webhooks/${id}`, { method: 'DELETE' }),
   claimWebhook: (id: string) => request<{ webhook: Webhook }>(`/webhooks/${id}/claim`, { method: 'POST' }),
+
+  // Outgoing webhooks (M22): the mirror-image feature — hivemind fires a signed POST to an
+  // external URL on message.created. Same owner-or-admin/shown-once-secret conventions as
+  // incoming webhooks above.
+  listOutgoingWebhooks: () => request<{ data: OutgoingWebhook[] }>('/outgoing-webhooks'),
+  listChannelOutgoingWebhooks: (channelId: string) => request<{ data: OutgoingWebhook[] }>(`/channels/${channelId}/outgoing-webhooks`),
+  createOutgoingWebhook: (channelId: string, body: OutgoingWebhookCreateBody) =>
+    request<{ webhook: OutgoingWebhook }>(`/channels/${channelId}/outgoing-webhooks`, { method: 'POST', body: JSON.stringify(body) }),
+  updateOutgoingWebhook: (id: string, body: OutgoingWebhookPatchBody) =>
+    request<{ webhook: OutgoingWebhook }>(`/outgoing-webhooks/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  regenerateOutgoingWebhookSecret: (id: string) =>
+    request<{ webhook: OutgoingWebhook }>(`/outgoing-webhooks/${id}/regenerate-secret`, { method: 'POST' }),
+  deleteOutgoingWebhook: (id: string) => request<{ ok: true }>(`/outgoing-webhooks/${id}`, { method: 'DELETE' }),
+  sendTestOutgoingWebhookEvent: (id: string) => request<{ ok: boolean; error?: string }>(`/outgoing-webhooks/${id}/test`, { method: 'POST' }),
+  listOutgoingWebhookDeliveries: (id: string, params: { before?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.before) qs.set('before', params.before)
+    if (params.limit) qs.set('limit', String(params.limit))
+    return request<{ data: WebhookDelivery[]; has_more: boolean; next_before: string | null }>(
+      `/outgoing-webhooks/${id}/deliveries?${qs.toString()}`,
+    )
+  },
 }

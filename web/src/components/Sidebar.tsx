@@ -8,7 +8,6 @@ import { wsClient, type ConnectionState } from '../lib/ws'
 import { Avatar } from './Avatar'
 import { CreateChannelModal } from './CreateChannelModal'
 import { BrowseChannelsModal } from './BrowseChannelsModal'
-import { ProfileModal } from './ProfileModal'
 import { NewMessageModal } from './NewMessageModal'
 import { PopoverMenu, MenuItem } from './PopoverMenu'
 import { dmDisplayName, dmIsOnline } from '../lib/dm'
@@ -66,8 +65,6 @@ function useConnectionState(): ConnectionState {
 export function Sidebar() {
   const [createOpen, setCreateOpen] = useState(false)
   const [browseOpen, setBrowseOpen] = useState(false)
-  const [profileOpen, setProfileOpen] = useState(false)
-  const [profileMode, setProfileMode] = useState<'view' | 'edit'>('view')
   const [footerMenuOpen, setFooterMenuOpen] = useState(false)
   const [channelMenuOpen, setChannelMenuOpen] = useState(false)
   const [leaveMenuId, setLeaveMenuId] = useState<string | null>(null)
@@ -96,12 +93,6 @@ export function Sidebar() {
   const channels = channelsQuery.data?.data ?? []
   const publicAndPrivate = channels.filter((c) => c.kind !== 'dm' && c.kind !== 'group_dm' && c.joined)
   const dms = dmsQuery.data?.data ?? []
-
-  function openProfile(mode: 'view' | 'edit') {
-    setProfileMode(mode)
-    setProfileOpen(true)
-    setFooterMenuOpen(false)
-  }
 
   async function logout() {
     setFooterMenuOpen(false)
@@ -366,17 +357,23 @@ export function Sidebar() {
           </button>
           {footerMenuOpen && (
             <PopoverMenu anchorClassName="bottom-full left-1 mb-1" onClose={() => setFooterMenuOpen(false)}>
-              <MenuItem onClick={() => openProfile('view')}>View profile</MenuItem>
-              <MenuItem onClick={() => openProfile('edit')}>Edit profile</MenuItem>
-              <div className="my-1 h-px bg-rule" />
               <MenuItem
                 onClick={() => {
                   setFooterMenuOpen(false)
-                  navigate('/api-keys')
+                  navigate('/settings/profile', { state: { from: location.pathname } })
+                }}
+              >
+                Profile
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  setFooterMenuOpen(false)
+                  navigate('/settings/api-keys', { state: { from: location.pathname } })
                 }}
               >
                 API keys
               </MenuItem>
+              <div className="my-1 h-px bg-rule" />
               <MenuItem
                 onClick={() => {
                   setFooterMenuOpen(false)
@@ -403,7 +400,6 @@ export function Sidebar() {
           )}
         </div>
       )}
-      {auth?.user && <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} user={auth.user} mode={profileMode} />}
       <CreateChannelModal open={createOpen} onClose={() => setCreateOpen(false)} />
       <BrowseChannelsModal open={browseOpen} onClose={() => setBrowseOpen(false)} />
       <NewMessageModal open={newMessageOpen} onClose={() => setNewMessageOpen(false)} />
