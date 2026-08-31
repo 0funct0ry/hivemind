@@ -1,0 +1,2 @@
+sleep 10
+echo "you should never see this — hivemind gives up after 5 seconds"

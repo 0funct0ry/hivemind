@@ -250,6 +250,83 @@ export interface WebhookDelivery {
   created_at: number
 }
 
+export interface Bot {
+  user_id: string
+  created_by: string
+  username: string
+  display_name: string
+  avatar_color: string
+  description: string
+  status: 'active' | 'revoked'
+  created_at: number
+  updated_at: number
+  /** Present only on create/regenerate responses — shown once, never retrievable again. */
+  token?: string
+}
+
+export interface BotCreateBody {
+  name: string
+  description?: string
+}
+
+/** GET /slash-commands shape — trigger/description/syntax_hint/admin_only only, per SPEC.md
+ * §4.12: visibility is unrestricted, execution is what's gated. */
+export interface SlashCommandSummary {
+  trigger: string
+  description: string
+  syntax_hint: string
+  admin_only: boolean
+}
+
+/** Full management detail for the Settings page, from GET /slash-commands/admin and the
+ * create/update/regenerate-secret responses. */
+export interface SlashCommand {
+  id: string
+  trigger: string
+  bot_id: string
+  description: string
+  syntax_hint: string
+  webhook_url: string
+  masked_secret: string
+  admin_only: boolean
+  status: 'active' | 'disabled'
+  created_by: string
+  created_at: number
+  updated_at: number
+  /** Present only on create/regenerate responses — shown once, never retrievable again. */
+  secret?: string
+}
+
+export interface SlashCommandCreateBody {
+  trigger: string
+  bot_id: string
+  description: string
+  syntax_hint?: string
+  webhook_url: string
+  admin_only: boolean
+}
+
+export interface SlashCommandPatchBody {
+  description?: string
+  syntax_hint?: string
+  webhook_url?: string
+  admin_only?: boolean
+  status?: 'active' | 'disabled'
+}
+
+export interface CommandExecRequest {
+  channel_id: string
+  thread_id?: string
+  trigger: string
+  args: string[]
+}
+
+export interface CommandExecResult {
+  response_type: 'ephemeral' | 'in_channel'
+  text?: string
+  attachments?: unknown[]
+}
+
 export interface UploadedFile {
   id: string
   sha256: string
@@ -458,4 +535,25 @@ export const api = {
       `/outgoing-webhooks/${id}/deliveries?${qs.toString()}`,
     )
   },
+
+  // Bots & slash commands (M23): a bot is a dedicated is_bot=1 user with its own hm_-prefixed
+  // bearer token; a slash command is an admin-registered webhook subscription keyed by a
+  // trigger string. Registration is admin-only; listing/execution is open to every member.
+  listBots: () => request<{ data: Bot[] }>('/bots'),
+  createBot: (body: BotCreateBody) => request<{ bot: Bot }>('/bots', { method: 'POST', body: JSON.stringify(body) }),
+  regenerateBotToken: (userId: string) => request<{ bot: Bot }>(`/bots/${userId}/regenerate-token`, { method: 'POST' }),
+  revokeBot: (userId: string) => request<{ ok: true }>(`/bots/${userId}/revoke`, { method: 'POST' }),
+  deleteBot: (userId: string) => request<{ ok: true }>(`/bots/${userId}`, { method: 'DELETE' }),
+
+  listSlashCommands: () => request<{ data: SlashCommandSummary[] }>('/slash-commands'),
+  listSlashCommandsAdmin: () => request<{ data: SlashCommand[] }>('/slash-commands/admin'),
+  createSlashCommand: (body: SlashCommandCreateBody) =>
+    request<{ command: SlashCommand }>('/slash-commands', { method: 'POST', body: JSON.stringify(body) }),
+  updateSlashCommand: (id: string, body: SlashCommandPatchBody) =>
+    request<{ command: SlashCommand }>(`/slash-commands/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  regenerateSlashCommandSecret: (id: string) =>
+    request<{ command: SlashCommand }>(`/slash-commands/${id}/regenerate-secret`, { method: 'POST' }),
+  deleteSlashCommand: (id: string) => request<{ ok: true }>(`/slash-commands/${id}`, { method: 'DELETE' }),
+  executeSlashCommand: (body: CommandExecRequest) =>
+    request<CommandExecResult>('/commands/execute', { method: 'POST', body: JSON.stringify(body) }),
 }

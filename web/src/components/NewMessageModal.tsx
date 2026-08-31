@@ -45,6 +45,7 @@ function PersonRow({ user, query, isSelf, onClick }: { user: User; query: string
         <PresenceDot online={user.online} />
         <Avatar name={name} color={user.avatar_color} avatarUrl={user.avatar_url} size={26} />
         <span className="truncate text-[14px] font-semibold text-ink">{highlightMatch(name, query)}</span>
+        {user.is_bot && <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>}
         <span className="ml-auto shrink-0 text-[12px] text-ink-3">
           {isSelf ? 'You' : user.online ? 'Online' : 'Offline'}
         </span>

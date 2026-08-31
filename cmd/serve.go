@@ -58,6 +58,7 @@ func addConfigFlags(cmd *cobra.Command) {
 	cmd.Flags().StringP("tls-key", "K", "", "TLS private key path")
 	cmd.Flags().BoolP("dev", "D", false, "enable development UI proxy")
 	cmd.Flags().StringP("dev-proxy", "P", "http://localhost:5173", "development UI proxy URL")
+	cmd.Flags().Bool("allow-insecure-webhooks", false, "allow outgoing webhooks and slash commands to target http:// and localhost/private-network hosts — development/testing only, never enable in production")
 }
 
 // runServe is shared by rootCmd and serveCmd so bare "hivemind" behaves
@@ -71,6 +72,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 	logging.New(loaded.Config.LogLevel, loaded.Config.LogFormat)
+	if loaded.Config.AllowInsecureWebhooks {
+		store.AllowInsecureWebhookTargets = true
+		slog.Default().Warn("--allow-insecure-webhooks is enabled: outgoing webhooks and slash commands may target http:// and localhost/private-network hosts. Never enable this in production.")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	s, err := store.Open(ctx, loaded.Config.DataDir)

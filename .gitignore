@@ -55,3 +55,7 @@ docs/dist/
 internal/web/dist/*
 !internal/web/dist/index.html
 
+# hivemind bot's per-trigger signing secrets, pasted in by whoever registers each slash
+# command locally — real secrets must never be committed (see scripts/bots/GUIDE.md).
+scripts/bots/commands/*.secret
+

@@ -1,0 +1,1 @@
+echo '{"response_type":"in_channel","text":"{{.Username}} announced: {{.ArgsJoined}}"}'

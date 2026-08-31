@@ -106,6 +106,7 @@ export function MentionPicker({
           )}
           <span className="flex-1 truncate">
             <span className="font-medium text-ink">{c.label}</span>
+            {c.user?.is_bot && <span className="ml-1 rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>}
             {c.sublabel && <span className="ml-1 text-ink-3">{c.sublabel}</span>}
           </span>
           {c.warning && <span className="text-[11px] text-pollen">{c.warning}</span>}

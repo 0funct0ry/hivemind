@@ -21,8 +21,20 @@ var resolveHost = func(ctx context.Context, host string) ([]net.IP, error) {
 	return addrs, nil
 }
 
+// AllowInsecureWebhookTargets disables the SSRF guard's scheme and destination-IP checks below,
+// permitting http:// and loopback/private-range/link-local target hosts for outgoing webhooks
+// and slash commands. It exists solely so a local, non-production hivemind instance can point a
+// webhook_url at a same-machine dev tool (e.g. `hivemind bot`) without a public HTTPS tunnel —
+// see scripts/bots/GUIDE.md. It is a package-level var, not a per-request option, because it is
+// set exactly once at process startup from `hivemind serve --allow-insecure-webhooks`
+// (cmd/serve.go) and never toggled again; production deployments must never enable it, since
+// doing so lets anyone who can create or edit a webhook/slash command point hivemind's server at
+// its own internal network.
+var AllowInsecureWebhookTargets bool
+
 // validateOutgoingWebhookTargetURL enforces SPEC.md §4.11's SSRF guard: target_url must be
-// https:// and resolve only to public, non-loopback, non-link-local, non-private-range hosts.
+// https:// and resolve only to public, non-loopback, non-link-local, non-private-range hosts —
+// unless AllowInsecureWebhookTargets has been explicitly opted into for local development.
 // Called at create time, at update time when target_url changes, and again at dispatch time
 // since DNS can change between the two.
 func validateOutgoingWebhookTargetURL(ctx context.Context, raw string) error {
@@ -30,7 +42,7 @@ func validateOutgoingWebhookTargetURL(ctx context.Context, raw string) error {
 	if err != nil {
 		return fmt.Errorf("target_url is not a valid URL")
 	}
-	if u.Scheme != "https" {
+	if u.Scheme != "https" && !(AllowInsecureWebhookTargets && u.Scheme == "http") {
 		return fmt.Errorf("target_url must use https://")
 	}
 	host := u.Hostname()
@@ -44,6 +56,9 @@ func validateOutgoingWebhookTargetURL(ctx context.Context, raw string) error {
 	}
 	if len(ips) == 0 {
 		return fmt.Errorf("target_url host did not resolve to any address")
+	}
+	if AllowInsecureWebhookTargets {
+		return nil
 	}
 	for _, ip := range ips {
 		if isDisallowedWebhookTargetIP(ip) {

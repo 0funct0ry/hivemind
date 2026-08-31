@@ -84,6 +84,14 @@ func isUniqueConstraintError(err error) bool {
 	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
+// isForeignKeyConstraintError checks if an error is a SQLite foreign key constraint violation.
+func isForeignKeyConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "FOREIGN KEY constraint failed")
+}
+
 // CreateMessage creates a message inside one transaction and updates the channel's last message ID.
 func (s *Store) CreateMessage(ctx context.Context, in MessageInput) (Message, bool, error) {
 	body := strings.TrimSpace(in.Body)

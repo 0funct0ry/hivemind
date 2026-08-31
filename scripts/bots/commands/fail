@@ -1,0 +1,2 @@
+echo "{{.Trigger}} failed on purpose (this script always exits non-zero)" >&2
+exit 1

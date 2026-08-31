@@ -31,6 +31,10 @@ type Session struct {
 const (
 	TokenPurposeAPIKey     = "api_key"
 	TokenPurposeCLISession = "cli_session"
+	// TokenPurposeBotToken marks a bot's own bearer token (M23). AuthenticateAPIToken applies no
+	// purpose filter, so a bot_token row authenticates through the exact same path a personal
+	// api_key does — a bot's token carries exactly its own user's posting permissions.
+	TokenPurposeBotToken = "bot_token"
 )
 
 // APIToken is an API token without its plaintext secret.

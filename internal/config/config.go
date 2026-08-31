@@ -36,6 +36,11 @@ type Config struct {
 	TLS           TLSConfig     `mapstructure:"tls"`
 	Dev           bool          `mapstructure:"dev"`
 	DevProxy      string        `mapstructure:"dev_proxy"`
+	// AllowInsecureWebhooks disables the SSRF guard's https-only/public-host requirement for
+	// outgoing webhooks and slash commands, permitting http:// and loopback/private-network
+	// targets. Development/testing only — never enable this in production (see
+	// internal/store/outgoing_webhook_ssrf.go's AllowInsecureWebhookTargets doc comment).
+	AllowInsecureWebhooks bool `mapstructure:"allow_insecure_webhooks"`
 }
 
 // Source identifies the layer that supplied a configuration value.
@@ -56,23 +61,24 @@ type Loaded struct {
 }
 
 var defaults = map[string]any{
-	"addr":            ":8080",
-	"data_dir":        "./data",
-	"workspace_name":  "Hivemind",
-	"base_url":        "",
-	"behind_proxy":    false,
-	"signup":          "invite",
-	"max_upload_size": "25MB",
-	"session_ttl":     "720h",
-	"log_level":       "info",
-	"log_format":      "",
-	"tls.cert":        "",
-	"tls.key":         "",
-	"dev":             false,
-	"dev_proxy":       "http://localhost:5173",
+	"addr":                    ":8080",
+	"data_dir":                "./data",
+	"workspace_name":          "Hivemind",
+	"base_url":                "",
+	"behind_proxy":            false,
+	"signup":                  "invite",
+	"max_upload_size":         "25MB",
+	"session_ttl":             "720h",
+	"log_level":               "info",
+	"log_format":              "",
+	"tls.cert":                "",
+	"tls.key":                 "",
+	"dev":                     false,
+	"dev_proxy":               "http://localhost:5173",
+	"allow_insecure_webhooks": false,
 }
 
-var configKeys = []string{"addr", "data_dir", "workspace_name", "base_url", "behind_proxy", "signup", "max_upload_size", "session_ttl", "log_level", "log_format", "tls.cert", "tls.key", "dev", "dev_proxy"}
+var configKeys = []string{"addr", "data_dir", "workspace_name", "base_url", "behind_proxy", "signup", "max_upload_size", "session_ttl", "log_level", "log_format", "tls.cert", "tls.key", "dev", "dev_proxy", "allow_insecure_webhooks"}
 
 // Load reads configuration from flags, environment, the first available config
 // file, and defaults, in that precedence order.
@@ -163,6 +169,7 @@ func decode(v *viper.Viper) (Config, error) {
 		BaseURL: v.GetString("base_url"), BehindProxy: v.GetBool("behind_proxy"), Signup: v.GetString("signup"),
 		MaxUploadSize: max, SessionTTL: ttl, LogLevel: v.GetString("log_level"), LogFormat: v.GetString("log_format"),
 		TLS: TLSConfig{Cert: v.GetString("tls.cert"), Key: v.GetString("tls.key")}, Dev: v.GetBool("dev"), DevProxy: v.GetString("dev_proxy"),
+		AllowInsecureWebhooks: v.GetBool("allow_insecure_webhooks"),
 	}, nil
 }
 
@@ -314,6 +321,7 @@ func renderYAML(c Config, sources map[string]Source, redact bool) string {
 	fmt.Fprintf(&b, "  key: %s%s\n", quote(key), source("tls.key"))
 	fmt.Fprintf(&b, "dev: %t%s\n", c.Dev, source("dev"))
 	fmt.Fprintf(&b, "dev_proxy: %s%s\n", quote(c.DevProxy), source("dev_proxy"))
+	fmt.Fprintf(&b, "allow_insecure_webhooks: %t%s\n", c.AllowInsecureWebhooks, source("allow_insecure_webhooks"))
 	return b.String()
 }
 

@@ -1,11 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { ApiError, api, type Message, type UploadedFile } from '../lib/api'
+import { useQuery } from '@tanstack/react-query'
+import { ApiError, api, type CommandExecResult, type Message, type SlashCommandSummary, type UploadedFile } from '../lib/api'
 import { newClientMsgId, useEditMessage, useMessages, useSendMessage } from '../hooks/useMessages'
 import { useUiStore } from '../store/ui'
 import { wsClient } from '../lib/ws'
 import { throttle } from '../lib/throttle'
 import { MentionPicker, useMentionCandidates } from './MentionPicker'
 import { EmojiPicker } from './EmojiPicker'
+import { SlashCommandPicker } from './SlashCommandPicker'
+import { EphemeralCard } from './EphemeralCard'
 import { fileTypeAbbrev } from '../lib/fileType'
 
 const EDIT_WINDOW_MS = 15 * 60 * 1000
@@ -55,6 +58,11 @@ export const Composer = forwardRef<
   const [editing, setEditing] = useState<{ id: string } | null>(null)
   const [stashedDraft, setStashedDraft] = useState<string | null>(null)
   const [editBanner, setEditBanner] = useState<string | null>(null)
+  const [slashQuery, setSlashQuery] = useState<string | null>(null)
+  const [activeCommand, setActiveCommand] = useState<SlashCommandSummary | null>(null)
+  const [slashWarning, setSlashWarning] = useState<string | null>(null)
+  const [executingCommand, setExecutingCommand] = useState<string | null>(null)
+  const [ephemeralResult, setEphemeralResult] = useState<{ result: CommandExecResult; failed: boolean } | null>(null)
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const draftStorageKey = threadId ? `${draftKey(channelId)}:thread:${threadId}` : draftKey(channelId)
@@ -104,10 +112,19 @@ export const Composer = forwardRef<
 
   const mentionCandidates = useMentionCandidates(channelId, mentionQuery ?? '')
 
+  const slashCommandsQuery = useQuery({
+    queryKey: ['slash-commands'],
+    queryFn: () => api.listSlashCommands(),
+    staleTime: 60_000,
+  })
+  const slashCommands = slashCommandsQuery.data?.data ?? []
+
   const handleChange = (value: string) => {
     setBody(value)
     persistDraft(value)
     sendTyping()
+    setSlashWarning(null)
+    if (activeCommand && !value.startsWith(activeCommand.trigger)) setActiveCommand(null)
 
     const cursor = textareaRef.current?.selectionStart ?? value.length
     const upToCursor = value.slice(0, cursor)
@@ -116,6 +133,7 @@ export const Composer = forwardRef<
       setMentionQuery(mentionMatch[1])
       setMentionStart(cursor - mentionMatch[1].length - 1)
       setShortcodeQuery(null)
+      setSlashQuery(null)
       return
     }
     setMentionQuery(null)
@@ -126,6 +144,15 @@ export const Composer = forwardRef<
       setShortcodeStart(cursor - shortcodeMatch[1].length - 1)
     } else {
       setShortcodeQuery(null)
+    }
+
+    // A "/" only opens the menu as the first character of an otherwise-empty composer — unlike
+    // @mention/:shortcode above, a "/" typed mid-sentence must never trigger it (SPEC.md §6.x).
+    const slashMatch = /^\/(\S*)$/.exec(value)
+    if (slashMatch && cursor === value.length) {
+      setSlashQuery(slashMatch[1])
+    } else {
+      setSlashQuery(null)
     }
   }
 
@@ -200,6 +227,61 @@ export const Composer = forwardRef<
     requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
+  /** Completes the recognized trigger into the composer (with a trailing space) and switches to
+   * showing its syntax_hint as a helper line above the composer, mirroring insertShortcodeEmoji's
+   * replace-at-trigger-point behavior. */
+  const insertSlashCommand = (command: SlashCommandSummary) => {
+    const next = `${command.trigger} `
+    setBody(next)
+    persistDraft(next)
+    setSlashQuery(null)
+    setActiveCommand(command)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  /** Counts the `<...>` required-argument placeholders in a syntax_hint, best-effort — used only
+   * for a local "did you forget an argument" warning, never round-tripped to the server. */
+  const requiredArgCount = (syntaxHint: string) => (syntaxHint.match(/<[^>]+>/g) ?? []).length
+
+  const runSlashCommand = async () => {
+    const trimmed = body.trim()
+    const [trigger, ...args] = trimmed.split(/\s+/)
+    const command = slashCommands.find((c) => c.trigger.toLowerCase() === trigger.toLowerCase())
+    if (!command) {
+      setSlashWarning(`Unknown command ${trigger}. Press Esc to exit or check Settings → Bots for the full list.`)
+      return
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setSlashWarning('You appear to be offline — try again once your connection is back.')
+      return
+    }
+    const needed = requiredArgCount(command.syntax_hint)
+    if (needed > 0 && args.length < needed) {
+      setSlashWarning(`${command.trigger} needs more arguments: ${command.syntax_hint}`)
+      return
+    }
+
+    setSlashWarning(null)
+    setActiveCommand(null)
+    setBody('')
+    persistDraft('')
+    setExecutingCommand(command.trigger)
+    try {
+      const result = await api.executeSlashCommand({ channel_id: channelId, thread_id: threadId, trigger: command.trigger, args })
+      if (result.response_type === 'ephemeral') {
+        setEphemeralResult({ result, failed: false })
+      }
+      // in_channel: nothing to render locally — the real message arrives over the WebSocket.
+    } catch (err) {
+      setEphemeralResult({
+        result: { response_type: 'ephemeral', text: err instanceof Error ? err.message : 'That command failed to respond.' },
+        failed: true,
+      })
+    } finally {
+      setExecutingCommand(null)
+    }
+  }
+
   const handleFiles = async (files: FileList | File[]) => {
     for (const file of Array.from(files)) {
       const chipId = `${file.name}-${Date.now()}-${Math.random()}`
@@ -250,6 +332,10 @@ export const Composer = forwardRef<
       handleSaveEdit()
       return
     }
+    if (/^\/\S/.test(body.trim()) && slashQuery === null) {
+      void runSlashCommand()
+      return
+    }
     if (!canSend) return
     const fileIds = uploads.filter((u) => u.file).map((u) => u.file!.id)
     sendMutation.mutate({
@@ -285,6 +371,9 @@ export const Composer = forwardRef<
     if (shortcodeQuery !== null && ['ArrowLeft', 'ArrowRight', 'ArrowDown', 'ArrowUp', 'Tab', 'Enter', 'Escape'].includes(e.key)) {
       return
     }
+    if (slashQuery !== null && ['ArrowDown', 'ArrowUp', 'Tab', 'Enter', 'Escape'].includes(e.key)) {
+      return
+    }
     if (e.key === 'Escape' && editing) {
       e.preventDefault()
       cancelEdit()
@@ -309,6 +398,35 @@ export const Composer = forwardRef<
           onSelect={(c) => insertMention(c.key)}
           onDismiss={() => setMentionQuery(null)}
         />
+      )}
+      {slashQuery !== null && (
+        <SlashCommandPicker
+          query={slashQuery}
+          commands={slashCommands}
+          anchorClassName="bottom-full left-2 mb-1"
+          onSelect={insertSlashCommand}
+          onDismiss={() => setSlashQuery(null)}
+        />
+      )}
+      {ephemeralResult && (
+        <EphemeralCard
+          result={ephemeralResult.result}
+          failed={ephemeralResult.failed}
+          onDismiss={() => setEphemeralResult(null)}
+        />
+      )}
+      {activeCommand && !slashWarning && (
+        <div className="mb-1.5 px-1 font-mono text-[10.5px] text-ink-3">
+          {activeCommand.syntax_hint || `${activeCommand.trigger} takes no arguments`}
+        </div>
+      )}
+      {slashWarning && (
+        <div className="mb-1.5 rounded-md border border-pollen bg-pollen-soft px-2.5 py-1.5 text-[12.5px] text-[#7A4E00]">
+          {slashWarning}
+        </div>
+      )}
+      {executingCommand && (
+        <div className="mb-1.5 px-1 font-mono text-[10.5px] text-ink-3">Executing {executingCommand} …</div>
       )}
       {shortcodeQuery !== null && (
         <EmojiPicker

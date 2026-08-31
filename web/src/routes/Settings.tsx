@@ -1,15 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ApiError, api, type APIToken, type OutgoingWebhook, type Webhook } from '../lib/api'
+import { ApiError, api, type APIToken, type Bot, type OutgoingWebhook, type SlashCommand, type Webhook } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { Avatar } from '../components/Avatar'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { WebhookFormModal, useOwnedChannels } from '../components/WebhookFormModal'
 import { OutgoingWebhookFormModal } from '../components/OutgoingWebhookFormModal'
+import { BotFormModal } from '../components/BotFormModal'
+import { BotInfoModal } from '../components/BotInfoModal'
+import { SlashCommandFormModal } from '../components/SlashCommandFormModal'
 import { NewTokenModal, formatTimestamp } from '../components/TokenWidgets'
 
-type Tab = 'profile' | 'api-keys' | 'notifications' | 'webhooks' | 'outgoing-webhooks'
+type Tab = 'profile' | 'api-keys' | 'notifications' | 'webhooks' | 'outgoing-webhooks' | 'bots'
 
 /** Maps a /settings/* sub-path to its initial tab, so sidebar menu items ("Profile", "API
  * keys") can deep-link into a specific tab instead of always landing on the default. */
@@ -17,6 +20,7 @@ function tabFromPathname(pathname: string): Tab {
   if (pathname.endsWith('/profile')) return 'profile'
   if (pathname.endsWith('/api-keys')) return 'api-keys'
   if (pathname.endsWith('/outgoing-webhooks')) return 'outgoing-webhooks'
+  if (pathname.endsWith('/bots')) return 'bots'
   return 'webhooks'
 }
 
@@ -55,6 +59,13 @@ const ICONS = {
     <>
       <circle cx="8" cy="8" r="5.5" />
       <path d="M5.4 8.2 7.2 10l3.2-3.6" />
+    </>
+  ),
+  info: (
+    <>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 7.3v3.4" />
+      <circle cx="8" cy="5.1" r="0.75" fill="currentColor" stroke="none" />
     </>
   ),
 }
@@ -618,6 +629,383 @@ function OutgoingWebhooksTab() {
   )
 }
 
+function BotStatusTag({ status }: { status: Bot['status'] }) {
+  if (status === 'active') {
+    return <span className="rounded-full bg-teal/10 px-2 py-0.5 text-xs font-medium text-teal">Active</span>
+  }
+  return <span className="rounded-full bg-paper-3 px-2 py-0.5 text-xs font-medium text-ink-2">Revoked</span>
+}
+
+function CommandStatusTag({ status }: { status: SlashCommand['status'] }) {
+  if (status === 'active') {
+    return <span className="rounded-full bg-teal/10 px-2 py-0.5 text-xs font-medium text-teal">Active</span>
+  }
+  return <span className="rounded-full bg-paper-3 px-2 py-0.5 text-xs font-medium text-ink-2">Disabled</span>
+}
+
+/** Settings → Bots: bot management plus registered slash commands, both admin-only per
+ * SPEC.md §4.12/§7.2. Two sections on one tab rather than two separate tabs, since a slash
+ * command's "post as" picker directly depends on the bots list above it. */
+function BotsTab() {
+  const qc = useQueryClient()
+  const [error, setError] = useState<string | null>(null)
+  const [botFormOpen, setBotFormOpen] = useState(false)
+  const [commandFormOpen, setCommandFormOpen] = useState(false)
+  const [pendingRevoke, setPendingRevoke] = useState<Bot | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<Bot | null>(null)
+  const [infoBot, setInfoBot] = useState<Bot | null>(null)
+  const [regenResult, setRegenResult] = useState<Bot | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [pendingCommandRegen, setPendingCommandRegen] = useState<SlashCommand | null>(null)
+  const [pendingCommandDelete, setPendingCommandDelete] = useState<SlashCommand | null>(null)
+  const [commandSecretResult, setCommandSecretResult] = useState<SlashCommand | null>(null)
+  const [commandSecretCopied, setCommandSecretCopied] = useState(false)
+
+  const { data: botsData, isLoading: botsLoading } = useQuery({ queryKey: ['bots'], queryFn: api.listBots })
+  const { data: commandsData, isLoading: commandsLoading } = useQuery({
+    queryKey: ['slash-commands-admin'],
+    queryFn: api.listSlashCommandsAdmin,
+  })
+  const bots = botsData?.data ?? []
+  const commands = commandsData?.data ?? []
+  const botNameById = new Map(bots.map((b) => [b.user_id, b.display_name]))
+
+  function onError(e: unknown) {
+    setError(e instanceof ApiError ? e.message : 'Something went wrong.')
+  }
+
+  const regenerateBot = useMutation({
+    mutationFn: (userId: string) => api.regenerateBotToken(userId),
+    onSuccess: (res) => {
+      setRegenResult(res.bot)
+      qc.invalidateQueries({ queryKey: ['bots'] })
+    },
+    onError,
+  })
+  const revokeBot = useMutation({
+    mutationFn: (userId: string) => api.revokeBot(userId),
+    onSuccess: () => {
+      setPendingRevoke(null)
+      qc.invalidateQueries({ queryKey: ['bots'] })
+    },
+    onError,
+  })
+  const deleteBot = useMutation({
+    mutationFn: (userId: string) => api.deleteBot(userId),
+    onSuccess: () => {
+      setPendingDelete(null)
+      qc.invalidateQueries({ queryKey: ['bots'] })
+    },
+    onError,
+  })
+  const toggleCommandStatus = useMutation({
+    mutationFn: (c: SlashCommand) => api.updateSlashCommand(c.id, { status: c.status === 'disabled' ? 'active' : 'disabled' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['slash-commands-admin'] })
+      qc.invalidateQueries({ queryKey: ['slash-commands'] })
+    },
+    onError,
+  })
+  const regenerateCommandSecret = useMutation({
+    mutationFn: (id: string) => api.regenerateSlashCommandSecret(id),
+    onSuccess: (res) => {
+      setPendingCommandRegen(null)
+      setCommandSecretResult(res.command)
+      qc.invalidateQueries({ queryKey: ['slash-commands-admin'] })
+    },
+    onError,
+  })
+  const deleteCommand = useMutation({
+    mutationFn: (id: string) => api.deleteSlashCommand(id),
+    onSuccess: () => {
+      setPendingCommandDelete(null)
+      qc.invalidateQueries({ queryKey: ['slash-commands-admin'] })
+      qc.invalidateQueries({ queryKey: ['slash-commands'] })
+    },
+    onError,
+  })
+
+  return (
+    <div>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="mb-1 font-display text-2xl font-semibold text-ink">Bots</h1>
+          <p className="text-sm text-ink-2">
+            A bot is a dedicated user with its own bearer token that can post messages on its own
+            initiative. Register a slash command to let members trigger an external webhook from
+            the composer.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setBotFormOpen(true)}
+          className="shrink-0 rounded bg-teal px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+        >
+          New bot
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {botsLoading ? (
+        <p className="text-ink-2">Loading bots…</p>
+      ) : bots.length === 0 ? (
+        <p className="text-ink-2">No bots yet.</p>
+      ) : (
+        <div className="mb-10 rounded-lg border border-rule">
+          <table className="w-full table-fixed text-left text-sm">
+            <thead className="bg-paper text-ink-2">
+              <tr>
+                <th className="w-[22%] px-4 py-2 font-medium">Bot</th>
+                <th className="w-[40%] px-4 py-2 font-medium">Description</th>
+                <th className="w-[13%] px-4 py-2 font-medium">Status</th>
+                <th className="w-[25%] px-4 py-2 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bots.map((b) => (
+                <tr key={b.user_id} className="border-t border-rule">
+                  <td className="truncate px-4 py-2 font-medium text-ink">
+                    <span className="flex items-center gap-1.5">
+                      <Avatar name={b.display_name} color={b.avatar_color} size={20} />
+                      {b.display_name}
+                      <span className="rounded bg-paper-3 px-1 font-mono text-[8px] text-ink-2">BOT</span>
+                    </span>
+                  </td>
+                  <td className="truncate px-4 py-2 text-ink-2">{b.description || '—'}</td>
+                  <td className="px-4 py-2">
+                    <BotStatusTag status={b.status} />
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex flex-wrap items-center gap-0.5">
+                      <IconButton
+                        title="Regenerate token"
+                        icon={ICONS.refresh}
+                        disabled={b.status === 'revoked'}
+                        onClick={() => regenerateBot.mutate(b.user_id)}
+                      />
+                      <IconButton
+                        title="Revoke"
+                        icon={ICONS.power}
+                        danger
+                        disabled={b.status === 'revoked'}
+                        onClick={() => setPendingRevoke(b)}
+                      />
+                      <IconButton title="Bot info" icon={ICONS.info} onClick={() => setInfoBot(b)} />
+                      <IconButton
+                        title={b.status === 'revoked' ? 'Delete' : 'Revoke before deleting'}
+                        icon={ICONS.trash}
+                        danger
+                        disabled={b.status !== 'revoked'}
+                        onClick={() => setPendingDelete(b)}
+                      />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="mb-1 font-display text-lg font-semibold text-ink">Slash commands</h2>
+          <p className="text-sm text-ink-2">
+            Workspace-wide — available in every channel a member can already post in. Execution
+            of an admin-only command is restricted to the channel's owner or an administrator.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCommandFormOpen(true)}
+          disabled={bots.length === 0}
+          className="shrink-0 rounded bg-teal px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+        >
+          New command
+        </button>
+      </div>
+
+      {commandsLoading ? (
+        <p className="text-ink-2">Loading slash commands…</p>
+      ) : commands.length === 0 ? (
+        <p className="text-ink-2">No slash commands registered yet.</p>
+      ) : (
+        <div className="rounded-lg border border-rule">
+          <table className="w-full table-fixed text-left text-sm">
+            <thead className="bg-paper text-ink-2">
+              <tr>
+                <th className="w-[12%] px-4 py-2 font-medium">Trigger</th>
+                <th className="w-[26%] px-4 py-2 font-medium">Description</th>
+                <th className="w-[14%] px-4 py-2 font-medium">Bot</th>
+                <th className="w-[10%] px-4 py-2 font-medium">Admin only</th>
+                <th className="w-[10%] px-4 py-2 font-medium">Status</th>
+                <th className="w-[28%] px-4 py-2 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {commands.map((c) => (
+                <tr key={c.id} className="border-t border-rule">
+                  <td className="truncate px-4 py-2 font-mono font-medium text-ink">{c.trigger}</td>
+                  <td className="truncate px-4 py-2 text-ink-2">{c.description}</td>
+                  <td className="truncate px-4 py-2 text-ink-2">{botNameById.get(c.bot_id) ?? c.bot_id}</td>
+                  <td className="px-4 py-2 text-ink-2">{c.admin_only ? 'Yes' : 'No'}</td>
+                  <td className="px-4 py-2">
+                    <CommandStatusTag status={c.status} />
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex flex-wrap items-center gap-0.5">
+                      <IconButton title="Regenerate secret" icon={ICONS.refresh} onClick={() => setPendingCommandRegen(c)} />
+                      <IconButton
+                        title={c.status === 'disabled' ? 'Enable' : 'Disable'}
+                        icon={ICONS.power}
+                        onClick={() => toggleCommandStatus.mutate(c)}
+                      />
+                      <IconButton title="Delete" icon={ICONS.trash} danger onClick={() => setPendingCommandDelete(c)} />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <BotFormModal open={botFormOpen} onClose={() => setBotFormOpen(false)} />
+      <SlashCommandFormModal open={commandFormOpen} onClose={() => setCommandFormOpen(false)} bots={bots} />
+
+      <ConfirmDialog
+        open={pendingRevoke !== null}
+        title="Revoke bot?"
+        body={
+          <>
+            The bot's token will stop authenticating immediately. Messages it already posted will
+            keep rendering.
+          </>
+        }
+        confirmLabel="Revoke"
+        busyLabel="Revoking…"
+        busy={revokeBot.isPending}
+        onClose={() => setPendingRevoke(null)}
+        onConfirm={() => pendingRevoke && revokeBot.mutate(pendingRevoke.user_id)}
+      />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete bot?"
+        body={
+          <>
+            This removes "{pendingDelete?.display_name}" from the bots list permanently. This
+            can't be undone.
+          </>
+        }
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        busy={deleteBot.isPending}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => pendingDelete && deleteBot.mutate(pendingDelete.user_id)}
+      />
+
+      <BotInfoModal bot={infoBot} onClose={() => setInfoBot(null)} />
+
+      <ConfirmDialog
+        open={pendingCommandRegen !== null}
+        title="Regenerate secret?"
+        body={<>The command's current signing secret will stop validating immediately.</>}
+        confirmLabel="Regenerate"
+        busyLabel="Regenerating…"
+        busy={regenerateCommandSecret.isPending}
+        onClose={() => setPendingCommandRegen(null)}
+        onConfirm={() => pendingCommandRegen && regenerateCommandSecret.mutate(pendingCommandRegen.id)}
+      />
+
+      <ConfirmDialog
+        open={pendingCommandDelete !== null}
+        title="Delete slash command?"
+        body={<>This can't be undone. The trigger will stop working immediately.</>}
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        busy={deleteCommand.isPending}
+        onClose={() => setPendingCommandDelete(null)}
+        onConfirm={() => pendingCommandDelete && deleteCommand.mutate(pendingCommandDelete.id)}
+      />
+
+      {regenResult?.token && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-lg border border-rule bg-white p-6 shadow-lg">
+            <h2 className="mb-1 font-display text-lg font-semibold text-ink">New bearer token</h2>
+            <p className="mb-4 text-sm text-ink-2">
+              This is shown once. Copy it now — it cannot be retrieved again.
+            </p>
+            <code className="mb-4 block break-all rounded border border-rule bg-paper px-3 py-2 text-sm text-ink">
+              {regenResult.token}
+            </code>
+            <div className="flex justify-end gap-2">
+              <button
+                className="rounded border border-rule px-3 py-1.5 text-sm text-ink hover:bg-paper"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(regenResult.token!)
+                  setCopied(true)
+                }}
+              >
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+              <button
+                className="rounded bg-teal px-3 py-1.5 text-sm text-white hover:opacity-90"
+                onClick={() => {
+                  setRegenResult(null)
+                  setCopied(false)
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {commandSecretResult?.secret && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-lg border border-rule bg-white p-6 shadow-lg">
+            <h2 className="mb-1 font-display text-lg font-semibold text-ink">New signing secret</h2>
+            <p className="mb-4 text-sm text-ink-2">
+              This is shown once. Copy it now and update the receiving system — it cannot be
+              retrieved again.
+            </p>
+            <code className="mb-4 block break-all rounded border border-rule bg-paper px-3 py-2 text-sm text-ink">
+              {commandSecretResult.secret}
+            </code>
+            <div className="flex justify-end gap-2">
+              <button
+                className="rounded border border-rule px-3 py-1.5 text-sm text-ink hover:bg-paper"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(commandSecretResult.secret!)
+                  setCommandSecretCopied(true)
+                }}
+              >
+                {commandSecretCopied ? 'Copied' : 'Copy'}
+              </button>
+              <button
+                className="rounded bg-teal px-3 py-1.5 text-sm text-white hover:opacity-90"
+                onClick={() => {
+                  setCommandSecretResult(null)
+                  setCommandSecretCopied(false)
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 const ACCEPTED_AVATAR_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
 function formatJoined(ts?: number): string {
@@ -989,6 +1377,8 @@ function TabButton({
 export function Settings() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { data: auth } = useAuth()
+  const isAdmin = auth?.user.role === 'admin'
   const [tab, setTab] = useState<Tab>(() => tabFromPathname(location.pathname))
   const backTo = (location.state as { from?: string } | null)?.from ?? '/'
 
@@ -1022,11 +1412,17 @@ export function Settings() {
           <TabButton active={tab === 'outgoing-webhooks'} onClick={() => setTab('outgoing-webhooks')}>
             Outgoing webhooks
           </TabButton>
+          {isAdmin && (
+            <TabButton active={tab === 'bots'} onClick={() => setTab('bots')}>
+              Bots
+            </TabButton>
+          )}
         </div>
       </aside>
       <div className="h-full flex-1 overflow-y-auto p-8">
         {tab === 'webhooks' && <WebhooksTab />}
         {tab === 'outgoing-webhooks' && <OutgoingWebhooksTab />}
+        {tab === 'bots' && isAdmin && <BotsTab />}
         {tab === 'profile' && <ProfileTab />}
         {tab === 'api-keys' && <ApiKeysTab />}
         {tab === 'notifications' && <p className="text-ink-2">Coming soon.</p>}

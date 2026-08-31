@@ -188,6 +188,20 @@ func NewRouter(s *store.Store, a *auth.Service, cfg config.Config) *gin.Engine {
 	v1.POST("/outgoing-webhooks/:id/test", outgoingWebhookTest(s))
 	v1.GET("/outgoing-webhooks/:id/deliveries", outgoingWebhookDeliveries(s))
 
+	v1.GET("/bots", RequireAdmin(), botList(s))
+	v1.POST("/bots", RequireAdmin(), botCreate(s))
+	v1.POST("/bots/:id/regenerate-token", RequireAdmin(), botRegenerateToken(s))
+	v1.POST("/bots/:id/revoke", RequireAdmin(), botRevoke(s))
+	v1.DELETE("/bots/:id", RequireAdmin(), botDelete(s))
+
+	v1.GET("/slash-commands", slashCommandList(s))
+	v1.GET("/slash-commands/admin", RequireAdmin(), slashCommandListAdmin(s))
+	v1.POST("/slash-commands", RequireAdmin(), slashCommandCreate(s))
+	v1.PATCH("/slash-commands/:id", RequireAdmin(), slashCommandUpdate(s))
+	v1.DELETE("/slash-commands/:id", RequireAdmin(), slashCommandDelete(s))
+	v1.POST("/slash-commands/:id/regenerate-secret", RequireAdmin(), slashCommandRegenerateSecret(s))
+	v1.POST("/commands/execute", commandExecute(s, h))
+
 	v1.GET("/search", search(s))
 	v1.GET("/unreads", unreadSummary(s))
 	v1.GET("/presence", presence(h))
